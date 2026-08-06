@@ -1,0 +1,30 @@
+# ---------------------------------------------------------------------------
+# Nothing containing business data may ever be committed. The whole point of
+# this repo is that the published site is data-free, so these rules matter more
+# than usual — the GitHub Pages site is world-readable.
+# ---------------------------------------------------------------------------
+
+# Extracted datasets (rates, margins, exposure, credit terms)
+data/
+payload.json
+public/payload.json
+
+# Raw exports from the billing system
+*.csv
+*.xls
+*.xlsx
+exports/
+
+# Secrets. supabase/.env holds the service_role key, which bypasses RLS.
+supabase/.env
+.env
+.env.*
+
+# The original single-file console, if it is ever copied in here
+voip_margin_console*.html
+
+# Local noise
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
