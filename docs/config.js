@@ -11,31 +11,20 @@
  * Find these under Supabase Dashboard > Project Settings > API.
  */
 
-/*
- * Public entry-point routing.
- *
- * GitHub Pages serves docs/index.html at the project root. The Operations
- * Portal is the real application shell and owns the single Supabase session.
- * Therefore a normal visit to the project root/index is routed to portal.html.
- *
- * The portal embeds index.html with ?embedded=1 so the dashboard itself can
- * still run inside the portal without redirecting back to the portal.
+/* Public entry-point routing: the project root opens the Operations Portal.
+ * The portal embeds index.html with ?embedded=1 so the dashboard can run
+ * inside the portal without redirecting back to the portal.
  */
 (function () {
   try {
     var path = window.location.pathname.replace(/\/+$/, '');
     var isProjectRoot = path === '/voip-margin-console' || path === '/voip-margin-console/index.html';
     var embedded = new URLSearchParams(window.location.search).get('embedded') === '1';
-
-    if (isProjectRoot && !embedded) {
-      window.location.replace('./portal.html');
-    }
-  } catch (e) {
-    /* Routing failure must never prevent Supabase_CONFIG from loading. */
-  }
+    if (isProjectRoot && !embedded) window.location.replace('./portal.html');
+  } catch (e) {}
 })();
 
 window.SUPABASE_CONFIG = {
   url: 'https://skqawjqabuhrgzpypkrx.supabase.co',
-  anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXAiLCJyZWYiOiJzI3Fhd2pxYWJ1aHJnenB5cGtyeCIsInJvbGUiOiJhbm9uIiwiaWF0IjoxNzg2MDI5NDU4LCJleHAiOjIxMDE2MDU0NTh9.VWfOY2tbA8esF-Qqc_gAO2xm1LYjo0Rd2yqX-OaZKZ4'
+  anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNrcWF3anFhYnVocmd6cHlwa3J4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYwMjk0NTgsImV4cCI6MjEwMTYwNTQ1OH0.VWfOY2tbA8esF-Qqc_gAO2xm1LYjo0Rd2yqX-OaZKZ4'
 };
