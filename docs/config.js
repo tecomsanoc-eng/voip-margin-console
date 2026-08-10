@@ -37,5 +37,5 @@
 
 window.SUPABASE_CONFIG = {
   url: 'https://skqawjqabuhrgzpypkrx.supabase.co',
-  anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXAiLCJzdXAiLCJz' 
+  anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXAiLCJzdXAiLCJz'
 };
