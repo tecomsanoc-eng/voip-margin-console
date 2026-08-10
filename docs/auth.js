@@ -1,6 +1,15 @@
-/* Login gate + data loader. Supports direct login and the parent Operations Portal session. */
+/* Login gate + data loader.
+ *
+ * The Operations Portal is the single authentication authority. When this
+ * console is embedded by docs/portal.html, do NOT create a second persisted
+ * Supabase auth session in the iframe. Instead, use the portal's current
+ * access token as the Authorization header for each request. This avoids
+ * refresh-token races between two Supabase clients and removes the second
+ * login form.
+ */
 (function () {
   'use strict';
+
   var cfg = window.SUPABASE_CONFIG || {};
   var gate = document.getElementById('authGate');
   var form = document.getElementById('authForm');
@@ -56,7 +65,49 @@
     return;
   }
 
-  var sb = window.supabase.createClient(cfg.url, cfg.anonKey);
+  function getPortalSession() {
+    try {
+      if (window.parent && window.parent !== window && window.parent.__PORTAL_SESSION) {
+        return window.parent.__PORTAL_SESSION;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  var embedded = !!getPortalSession();
+  var sb;
+
+  if (embedded) {
+    /*
+     * Embedded mode deliberately has no persistent auth session and no
+     * refresh-token handling. Supabase's Data API will receive the current
+     * portal access token on every request. The custom fetch reads the parent
+     * session each time, so a TOKEN_REFRESHED event in the portal is picked up
+     * automatically without reloading this page.
+     */
+    sb = window.supabase.createClient(cfg.url, cfg.anonKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+        detectSessionInUrl: false
+      },
+      global: {
+        fetch: function (input, init) {
+          init = init || {};
+          var headers = new Headers(init.headers || {});
+          var session = getPortalSession();
+          if (session && session.access_token) {
+            headers.set('Authorization', 'Bearer ' + session.access_token);
+          }
+          return window.fetch(input, Object.assign({}, init, { headers: headers }));
+        }
+      }
+    });
+  } else {
+    /* Direct visit: retain the normal login/session behaviour. */
+    sb = window.supabase.createClient(cfg.url, cfg.anonKey);
+  }
+
   var booted = false;
 
   function showConsole() {
@@ -70,9 +121,11 @@
   function loadAndRender() {
     say('Loading margin data…', 'ok');
     submitEl.disabled = true;
+
     return sb.rpc('get_console_payload').then(function (res) {
       if (res.error) throw res.error;
       if (!res.data) throw new Error('The payload came back empty.');
+
       if (!booted) {
         window.bootConsole(res.data);
         booted = true;
@@ -81,51 +134,32 @@
     }).catch(function (err) {
       submitEl.disabled = false;
       var m = (err && (err.message || err.error_description)) || String(err);
-      if (/authentication required/i.test(m)) {
-        say('Signed in, but this account has no data access yet. Ask an admin to confirm your user is active.', 'err');
+      if (/authentication required/i.test(m) || /jwt/i.test(m) || /unauthorized/i.test(m)) {
+        say('Your portal session is not available to the dashboard. Refresh the portal once.', 'err');
       } else {
         say('Could not load data: ' + m, 'err');
       }
     });
   }
 
-  // The portal is the single authentication authority. Because the console is
-  // loaded in a same-origin iframe, it can safely adopt the already-authenticated
-  // Supabase session and never show a second login form.
-  function getPortalSession() {
-    try {
-      if (window.parent && window.parent !== window && window.parent.__PORTAL_SESSION) {
-        return window.parent.__PORTAL_SESSION;
-      }
-    } catch (e) {}
-    return null;
-  }
-
-  async function adoptPortalSession() {
-    var session = getPortalSession();
-    if (!session || !session.access_token || !session.refresh_token) return false;
-    try {
-      var current = await sb.auth.getSession();
-      if (!current.data || !current.data.session || current.data.session.access_token !== session.access_token) {
-        var result = await sb.auth.setSession({
-          access_token: session.access_token,
-          refresh_token: session.refresh_token
-        });
-        if (result.error) throw result.error;
-      }
-      await loadAndRender();
-      return true;
-    } catch (e) {
-      say('Portal session could not be restored: ' + (e.message || e), 'err');
-      return false;
-    }
+  function enterEmbeddedMode() {
+    if (!getPortalSession()) return false;
+    /* Never display the child login form when the parent is authenticated. */
+    emailEl.value = '';
+    passEl.value = '';
+    loadAndRender();
+    return true;
   }
 
   form.addEventListener('submit', function (e) {
     e.preventDefault();
     submitEl.disabled = true;
     say('Signing in…', 'ok');
-    sb.auth.signInWithPassword({email: emailEl.value.trim(), password: passEl.value}).then(function (res) {
+
+    sb.auth.signInWithPassword({
+      email: emailEl.value.trim(),
+      password: passEl.value
+    }).then(function (res) {
       if (res.error) {
         submitEl.disabled = false;
         say(res.error.message, 'err');
@@ -137,18 +171,43 @@
   });
 
   signOutBtn.addEventListener('click', function () {
+    if (embedded) {
+      try {
+        if (window.parent && typeof window.parent.signOut === 'function') {
+          window.parent.signOut();
+          return;
+        }
+      } catch (e) {}
+    }
     sb.auth.signOut().then(function () { window.location.reload(); });
   });
 
-  adoptPortalSession().then(function (adopted) {
-    if (adopted) return;
-    sb.auth.getSession().then(function (res) {
-      if (res.data && res.data.session) {
-        loadAndRender();
+  /*
+   * Embedded portal: wait briefly for the parent's session handoff. This also
+   * handles the iframe being created before the parent's auth state listener
+   * has finished publishing __PORTAL_SESSION.
+   */
+  if (embedded) {
+    var attempts = 0;
+    (function waitForPortalSession() {
+      if (enterEmbeddedMode()) return;
+      attempts += 1;
+      if (attempts < 40) {
+        setTimeout(waitForPortalSession, 100);
       } else {
         submitEl.disabled = false;
-        say('');
+        say('Portal session not detected. Please refresh the portal.', 'err');
       }
-    });
+    })();
+    return;
+  }
+
+  sb.auth.getSession().then(function (res) {
+    if (res.data && res.data.session) {
+      loadAndRender();
+    } else {
+      submitEl.disabled = false;
+      say('');
+    }
   });
 })();
