@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VoIP Margin Console — Import Test</title>
+<style>
+:root{--bg:#0b0f18;--panel:#121a28;--panel2:#182233;--border:#243044;--text:#e7ecf5;--muted:#8493ab;--accent:#4fd1c5;--green:#3ecf8e;--red:#ef5b5b;--yellow:#f0b93a;--mono:'IBM Plex Mono',Consolas,monospace;--sans:Inter,'Segoe UI',sans-serif}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px var(--sans)}.wrap{max-width:1200px;margin:auto;padding:28px 20px 60px}h1{margin:0 0 4px;font-size:22px}.sub{color:var(--muted);font-size:12px;margin-bottom:20px}.card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px;margin:14px 0}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.stat{background:var(--panel2);border:1px solid var(--border);border-radius:9px;padding:12px}.stat b{display:block;font:700 18px var(--mono)}.stat span{font-size:10px;color:var(--muted);text-transform:uppercase}.drop{border:2px dashed var(--border);border-radius:10px;padding:38px;text-align:center;cursor:pointer}.drop:hover{border-color:var(--accent)}button{border:0;border-radius:8px;padding:10px 15px;font-weight:700;cursor:pointer;background:var(--accent);color:#08131a}button.secondary{background:var(--panel2);border:1px solid var(--border);color:var(--text)}button:disabled{opacity:.45;cursor:not-allowed}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.msg{margin-top:12px;padding:10px;border-radius:8px;background:var(--panel2);color:var(--muted);white-space:pre-wrap}.ok{color:var(--green)}.err{color:var(--red)}.warn{color:var(--yellow)}table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:left;padding:8px;border-bottom:1px solid var(--border);white-space:nowrap}th{color:var(--muted);font-size:10px;text-transform:uppercase}.scroll{overflow:auto;max-height:420px}.hidden{display:none}.login{max-width:380px;margin:12vh auto}.login input{display:block;width:100%;margin:8px 0;padding:11px;border:1px solid var(--border);border-radius:8px;background:var(--panel2);color:var(--text)}code{font-family:var(--mono)}
+</style>
+</head>
+<body>
+<div id="login" class="login card">
+<h1>Import Test</h1><div class="sub">Sign in with the same Supabase account used by the console.</div>
+<input id="email" type="email" placeholder="Email"><input id="password" type="password" placeholder="Password">
+<button id="loginBtn">Sign in</button><div id="loginMsg" class="msg"></div>
+</div>
+<div id="app" class="wrap hidden">
+<h1>VoIP Margin Console — Data Import Test</h1>
+<div class="sub">SAFE TEST MODE: this page writes only to <code>customer_routes_import_test</code>. It never writes to <code>customer_routes</code>.</div>
+<div class="card">
+<div id="drop" class="drop">Drop an Excel/CSV file here<br><small>or click to choose .xlsx, .xls, or .csv</small><input id="file" type="file" accept=".xlsx,.xls,.csv" hidden></div>
+<div id="fileInfo" class="msg">No file selected.</div>
+<div class="actions"><button id="validateBtn" disabled>Validate & Preview</button><button id="testBtn" class="secondary" disabled>Import First 100 Rows</button><button id="fullBtn" disabled>Import ALL Rows to Test DB</button><button id="clearBtn" class="secondary">Clear My Test Rows</button><button id="logoutBtn" class="secondary">Sign out</button></div>
+<div id="msg" class="msg"></div>
+</div>
+<div id="stats" class="card hidden"><div class="grid"><div class="stat"><b id="sRows">0</b><span>Rows</span></div><div class="stat"><b id="sDest">0</b><span>Destinations</span></div><div class="stat"><b id="sCust">0</b><span>Customers</span></div><div class="stat"><b id="sProv">0</b><span>Providers</span></div></div></div>
+<div id="preview" class="card hidden"><h3>Preview</h3><div class="sub" id="columns"></div><div class="scroll"><table><thead><tr id="head"></tr></thead><tbody id="body"></tbody></table></div></div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="./config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script>
+(function(){'use strict';
+const cfg=window.SUPABASE_CONFIG||{}; const sb=window.supabase.createClient(cfg.url,cfg.anonKey);
+const REQUIRED=['id','customer','destination','provider','sell','buy','profit','profit_pct','asr','acd','calls','dur','rev','exp'];
+const NUM=['sell','buy','profit','profit_pct','asr','acd','dur','rev','exp']; const INT=['id','calls'];
+let session=null, rows=[], fileName='';
+const $=id=>document.getElementById(id); const msg=(t,c='')=>{$('msg').textContent=t;$('msg').className='msg '+c};
+function loginMsg(t,c=''){ $('loginMsg').textContent=t;$('loginMsg').className='msg '+c }
+function setButtons(v){$('validateBtn').disabled=!v;$('testBtn').disabled=!v;$('fullBtn').disabled=!v}
+function num(v){if(v===null||v===undefined||v==='')return null; if(typeof v==='number')return Number.isFinite(v)?v:null; const n=Number(String(v).replace(/,/g,'').replace(/%/g,'')); return Number.isFinite(n)?n:null}
+function int(v){const n=num(v);return n===null?null:Math.trunc(n)}
+function normalizeHeader(h){return String(h??'').trim().toLowerCase().replace(/\s+/g,'_')}
+function parseFile(file){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=e=>{try{const wb=XLSX.read(e.target.result,{type:'array',cellDates:true});const ws=wb.Sheets[wb.SheetNames[0]];const raw=XLSX.utils.sheet_to_json(ws,{defval:null,raw:true});resolve({raw,sheets:wb.SheetNames})}catch(err){reject(err)}};r.onerror=reject;r.readAsArrayBuffer(file)})}
+function validate(raw){if(!raw.length)throw Error('The first worksheet is empty.');const original=Object.keys(raw[0]);const map={};original.forEach(h=>map[normalizeHeader(h)]=h);const missing=REQUIRED.filter(x=>!map[x]);if(missing.length)throw Error('Missing required column(s): '+missing.join(', '));const out=[];const seen=new Set();const errors=[];raw.forEach((r,i)=>{const row={};REQUIRED.forEach(k=>row[k]=r[map[k]]);row.id=int(row.id);['customer','destination','provider'].forEach(k=>{if(row[k]!==null&&row[k]!==undefined)row[k]=String(row[k]).trim()});NUM.forEach(k=>row[k]=num(row[k]));INT.forEach(k=>row[k]=int(row[k]));if(row.id===null||row.id<0)errors.push('Row '+(i+2)+': invalid id');if(seen.has(row.id))errors.push('Row '+(i+2)+': duplicate id '+row.id);seen.add(row.id);['customer','destination','provider'].forEach(k=>{if(!row[k])errors.push('Row '+(i+2)+': '+k+' is empty')});NUM.forEach(k=>{if(r[map[k]]!==null&&r[map[k]]!==undefined&&r[map[k]]!==''&&row[k]===null)errors.push('Row '+(i+2)+': '+k+' is not numeric')});if(row.calls===null)errors.push('Row '+(i+2)+': calls is invalid');out.push(row)});if(errors.length)throw Error(errors.slice(0,25).join('\n')+(errors.length>25?'\n… plus '+(errors.length-25)+' more errors':''));return out}
+function render(){if(!rows.length)return;$('stats').classList.remove('hidden');$('preview').classList.remove('hidden');$('sRows').textContent=rows.length.toLocaleString();$('sDest').textContent=new Set(rows.map(r=>r.destination)).size.toLocaleString();$('sCust').textContent=new Set(rows.map(r=>r.customer)).size.toLocaleString();$('sProv').textContent=new Set(rows.map(r=>r.provider)).size.toLocaleString();$('columns').textContent='Validated schema: '+REQUIRED.join(', ');$('head').innerHTML=REQUIRED.map(x=>'<th>'+x+'</th>').join('');$('body').innerHTML=rows.slice(0,25).map(r=>'<tr>'+REQUIRED.map(k=>'<td>'+String(r[k]??'')+'</td>').join('')+'</tr>').join('')}
+async function insertBatch(batchId,data){const payload=data.map(r=>({...r,batch_id:batchId,uploaded_by:session.user.id,source_file:fileName}));const {error}=await sb.from('customer_routes_import_test').insert(payload);if(error)throw error}
+async function importRows(limit){if(!rows.length)return;const data=rows.slice(0,limit||rows.length);const batchId=crypto.randomUUID();msg('Starting test import of '+data.length.toLocaleString()+' rows…','warn');for(let i=0;i<data.length;i+=500){await insertBatch(batchId,data.slice(i,i+500));msg('Imported '+Math.min(i+500,data.length).toLocaleString()+' / '+data.length.toLocaleString()+' rows…','warn')}const {count,error}=await sb.from('customer_routes_import_test').select('*',{count:'exact',head:true}).eq('batch_id',batchId);if(error)throw error;msg('TEST SUCCESS\nBatch: '+batchId+'\nRows written: '+count+'\nTarget: customer_routes_import_test\nProduction customer_routes table was NOT changed.','ok')}
+async function clearMine(){const {error}=await sb.from('customer_routes_import_test').delete().eq('uploaded_by',session.user.id);if(error)throw error;msg('Your test rows were deleted.','ok')}
+$('drop').onclick=()=>$('file').click();$('file').onchange=()=>handleFile($('file').files[0]);$('drop').ondragover=e=>{e.preventDefault()};$('drop').ondrop=e=>{e.preventDefault();handleFile(e.dataTransfer.files[0])};
+async function handleFile(f){if(!f)return;fileName=f.name;try{msg('Reading '+fileName+'…','warn');const parsed=await parseFile(f);rows=validate(parsed.raw);$('fileInfo').textContent=fileName+' — '+parsed.sheets.join(', ')+' — '+rows.length.toLocaleString()+' rows';render();setButtons(true);msg('Validation passed. Nothing has been written yet.','ok')}catch(e){rows=[];setButtons(false);msg('VALIDATION FAILED\n'+(e.message||e),'err')}}
+$('validateBtn').onclick=()=>{if(rows.length)msg('Validation already passed. Preview shows the first 25 rows.','ok')};$('testBtn').onclick=()=>importRows(100).catch(e=>msg('IMPORT FAILED\n'+(e.message||e),'err'));$('fullBtn').onclick=()=>{if(confirm('Import all '+rows.length.toLocaleString()+' rows into the TEST table only?'))importRows().catch(e=>msg('IMPORT FAILED\n'+(e.message||e),'err'))};$('clearBtn').onclick=()=>clearMine().catch(e=>msg('CLEAR FAILED\n'+(e.message||e),'err'));$('logoutBtn').onclick=async()=>{await sb.auth.signOut();location.reload()};
+$('loginBtn').onclick=async()=>{loginMsg('Signing in…');const {data,error}=await sb.auth.signInWithPassword({email:$('email').value.trim(),password:$('password').value});if(error)return loginMsg(error.message,'err');session=data.session;showApp()};
+async function showApp(){$('login').classList.add('hidden');$('app').classList.remove('hidden');}
+sb.auth.getSession().then(({data})=>{if(data.session){session=data.session;showApp()}});
+})();
+</script>
+</body>
+</html>
