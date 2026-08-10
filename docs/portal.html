@@ -54,34 +54,9 @@
 const sb=supabase.createClient(window.SUPABASE_CONFIG.url,window.SUPABASE_CONFIG.anonKey);
 const frame=document.getElementById('contentFrame');
 let booted=false;
-let frameSessionSyncBusy=false;
 
 function msg(text,cls=''){const e=document.getElementById('loginMsg');e.textContent=text;e.className='login-msg '+cls}
 function activeNav(id){document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active'));const x=document.getElementById(id);if(x)x.classList.add('active')}
-
-// Share the authenticated session with same-origin child pages. This is the
-// important part that removes the second login form from Dashboard and Import.
-async function syncFrameSession(){
-  if(!window.__PORTAL_SESSION || frameSessionSyncBusy) return;
-  frameSessionSyncBusy=true;
-  try{
-    const child=frame.contentWindow;
-    if(!child || !child.supabase || !child.SUPABASE_CONFIG) return;
-    const childClient=child.supabase.createClient(child.SUPABASE_CONFIG.url,child.SUPABASE_CONFIG.anonKey);
-    const current=await childClient.auth.getSession();
-    const wanted=window.__PORTAL_SESSION;
-    if(!current.data || !current.data.session || current.data.session.access_token!==wanted.access_token){
-      const result=await childClient.auth.setSession({access_token:wanted.access_token,refresh_token:wanted.refresh_token});
-      if(result.error) throw result.error;
-      // Child auth code reads the session during startup. Reload once after
-      // handing it the session so it starts authenticated instead of showing login.
-      child.location.reload();
-    }
-  }catch(e){console.warn('Frame session sync failed',e)}
-  finally{frameSessionSyncBusy=false}
-}
-frame.addEventListener('load',syncFrameSession);
-
 function loadFrame(src){frame.src=src}
 function showDashboard(){activeNav('navDashboard');document.getElementById('pageTitle').textContent='Dashboard';document.getElementById('pageSub').textContent='Routing intelligence, margin visibility and carrier analysis in one place.';document.getElementById('frameTitle').textContent='Dashboard';loadFrame('./index.html')}
 function showImport(){activeNav('navImport');document.getElementById('pageTitle').textContent='Data Import';document.getElementById('pageSub').textContent='Upload, validate, review and safely update route data from Excel or CSV.';document.getElementById('frameTitle').textContent='Excel / CSV Import';loadFrame('./import-modern.html')}
@@ -111,7 +86,6 @@ async function signIn(email,password){
 async function signOut(){
   booted=false;
   window.__PORTAL_SESSION=null;
-  try{if(frame.contentWindow&&frame.contentWindow.supabase&&frame.contentWindow.SUPABASE_CONFIG){const c=frame.contentWindow.supabase.createClient(frame.contentWindow.SUPABASE_CONFIG.url,frame.contentWindow.SUPABASE_CONFIG.anonKey);await c.auth.signOut();}}catch(e){}
   await sb.auth.signOut();
   frame.src='about:blank';
   document.getElementById('portalApp').style.display='none';
