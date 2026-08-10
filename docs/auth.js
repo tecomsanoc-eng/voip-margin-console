@@ -3,9 +3,7 @@
  * The Operations Portal is the single authentication authority. When this
  * console is embedded by docs/portal.html, do NOT create a second persisted
  * Supabase auth session in the iframe. Instead, use the portal's current
- * access token as the Authorization header for each request. This avoids
- * refresh-token races between two Supabase clients and removes the second
- * login form.
+ * access token as the Authorization header for each request.
  */
 (function () {
   'use strict';
@@ -65,25 +63,43 @@
     return;
   }
 
-  function getPortalSession() {
+  /*
+   * Detect the portal by its DOM, not by its session. This is important:
+   * the iframe can execute before the parent has finished setting
+   * __PORTAL_SESSION. We therefore choose embedded mode immediately and wait
+   * for the parent's session below.
+   */
+  function isPortalFrame() {
     try {
-      if (window.parent && window.parent !== window && window.parent.__PORTAL_SESSION) {
-        return window.parent.__PORTAL_SESSION;
-      }
-    } catch (e) {}
-    return null;
+      return !!(
+        window.parent &&
+        window.parent !== window &&
+        window.parent.document &&
+        window.parent.document.getElementById('portalApp')
+      );
+    } catch (e) {
+      return false;
+    }
   }
 
-  var embedded = !!getPortalSession();
+  var embedded = isPortalFrame();
+
+  function getPortalSession() {
+    if (!embedded) return null;
+    try {
+      return window.parent.__PORTAL_SESSION || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   var sb;
 
   if (embedded) {
     /*
-     * Embedded mode deliberately has no persistent auth session and no
-     * refresh-token handling. Supabase's Data API will receive the current
-     * portal access token on every request. The custom fetch reads the parent
-     * session each time, so a TOKEN_REFRESHED event in the portal is picked up
-     * automatically without reloading this page.
+     * No persistent auth session is created inside the iframe. Every Supabase
+     * Data API request receives the latest access token from the portal.
+     * This prevents refresh-token races between two GoTrue clients.
      */
     sb = window.supabase.createClient(cfg.url, cfg.anonKey, {
       auth: {
@@ -143,7 +159,8 @@
   }
 
   function enterEmbeddedMode() {
-    if (!getPortalSession()) return false;
+    var session = getPortalSession();
+    if (!session || !session.access_token) return false;
     /* Never display the child login form when the parent is authenticated. */
     emailEl.value = '';
     passEl.value = '';
@@ -153,6 +170,13 @@
 
   form.addEventListener('submit', function (e) {
     e.preventDefault();
+
+    /* Embedded pages must never authenticate independently. */
+    if (embedded) {
+      say('Use the portal sign-in.', 'err');
+      return;
+    }
+
     submitEl.disabled = true;
     say('Signing in…', 'ok');
 
@@ -182,17 +206,12 @@
     sb.auth.signOut().then(function () { window.location.reload(); });
   });
 
-  /*
-   * Embedded portal: wait briefly for the parent's session handoff. This also
-   * handles the iframe being created before the parent's auth state listener
-   * has finished publishing __PORTAL_SESSION.
-   */
   if (embedded) {
     var attempts = 0;
     (function waitForPortalSession() {
       if (enterEmbeddedMode()) return;
       attempts += 1;
-      if (attempts < 40) {
+      if (attempts < 100) {
         setTimeout(waitForPortalSession, 100);
       } else {
         submitEl.disabled = false;
