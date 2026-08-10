@@ -57,6 +57,40 @@ let booted=false;
 
 function msg(text,cls=''){const e=document.getElementById('loginMsg');e.textContent=text;e.className='login-msg '+cls}
 function activeNav(id){document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active'));const x=document.getElementById(id);if(x)x.classList.add('active')}
+
+/* The portal is the navigation shell. The embedded dashboard keeps all of its
+ * original data/search/rendering logic, but its duplicate horizontal tabs are
+ * hidden so the left portal navigation is the single source of navigation. */
+function cleanDashboardFrame(){
+  try{
+    if(!frame.contentWindow || !frame.contentDocument) return;
+    if(!frame.src.includes('index.html')) return;
+    const d=frame.contentDocument;
+    if(d.getElementById('vm-portal-dashboard-style')) return;
+    const style=d.createElement('style');
+    style.id='vm-portal-dashboard-style';
+    style.textContent=`
+      .tabs{display:none!important}
+      .wrap{max-width:none!important;width:100%!important;margin:0!important;padding:28px 28px 60px!important}
+      .wrap>h1{font-size:27px!important;margin-top:2px!important}
+      .wrap>.sub{margin-bottom:22px!important}
+      .searchbox input{background:#fff!important;color:#172033!important;border-color:#dce4ef!important;box-shadow:0 2px 8px rgba(15,23,42,.03)!important}
+      .searchbox input::placeholder{color:#8a98ad!important}
+      .legend{color:#718096!important}
+      .table-wrap{background:#fff!important;border-color:#e1e7f0!important;box-shadow:0 8px 24px rgba(15,23,42,.05)!important}
+      th{background:#f7f9fc!important;color:#718096!important;border-bottom-color:#e1e7f0!important}
+      td{border-bottom-color:#edf1f6!important;color:#263247!important}
+      tr:hover td{background:#f8fafc!important}
+      .summary-bar .stat{background:#fff!important;border-color:#e1e7f0!important;box-shadow:0 4px 12px rgba(15,23,42,.04)!important}
+      .stat .l{color:#718096!important}
+      .control-bar .fchip,.control-bar .am-select{background:#fff!important;border-color:#dce4ef!important;color:#52627a!important}
+      .control-bar .fchip.active{background:#2563eb!important;border-color:#2563eb!important;color:#fff!important}
+    `;
+    d.head.appendChild(style);
+  }catch(e){}
+}
+frame.addEventListener('load',cleanDashboardFrame);
+
 function loadFrame(src){frame.src=src}
 function showDashboard(){activeNav('navDashboard');document.getElementById('pageTitle').textContent='Dashboard';document.getElementById('pageSub').textContent='Routing intelligence, margin visibility and carrier analysis in one place.';document.getElementById('frameTitle').textContent='Dashboard';loadFrame('./index.html?embedded=1')}
 function showImport(){activeNav('navImport');document.getElementById('pageTitle').textContent='Data Import';document.getElementById('pageSub').textContent='Upload, validate, review and safely update route data from Excel or CSV.';document.getElementById('frameTitle').textContent='Excel / CSV Import';loadFrame('./import-modern.html')}
