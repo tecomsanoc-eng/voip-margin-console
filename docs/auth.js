@@ -1,4 +1,4 @@
-/* Login gate + data loader. */
+/* Login gate + data loader. Supports direct login and the parent Operations Portal session. */
 (function () {
   'use strict';
   var cfg = window.SUPABASE_CONFIG || {};
@@ -59,6 +59,14 @@
   var sb = window.supabase.createClient(cfg.url, cfg.anonKey);
   var booted = false;
 
+  function showConsole() {
+    gate.style.display = 'none';
+    appWrap.style.display = '';
+    signOutBtn.style.display = '';
+    addImportLink();
+    say('');
+  }
+
   function loadAndRender() {
     say('Loading margin data…', 'ok');
     submitEl.disabled = true;
@@ -69,11 +77,7 @@
         window.bootConsole(res.data);
         booted = true;
       }
-      gate.style.display = 'none';
-      appWrap.style.display = '';
-      signOutBtn.style.display = '';
-      addImportLink();
-      say('');
+      showConsole();
     }).catch(function (err) {
       submitEl.disabled = false;
       var m = (err && (err.message || err.error_description)) || String(err);
@@ -83,6 +87,38 @@
         say('Could not load data: ' + m, 'err');
       }
     });
+  }
+
+  // The portal is the single authentication authority. Because the console is
+  // loaded in a same-origin iframe, it can safely adopt the already-authenticated
+  // Supabase session and never show a second login form.
+  function getPortalSession() {
+    try {
+      if (window.parent && window.parent !== window && window.parent.__PORTAL_SESSION) {
+        return window.parent.__PORTAL_SESSION;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  async function adoptPortalSession() {
+    var session = getPortalSession();
+    if (!session || !session.access_token || !session.refresh_token) return false;
+    try {
+      var current = await sb.auth.getSession();
+      if (!current.data || !current.data.session || current.data.session.access_token !== session.access_token) {
+        var result = await sb.auth.setSession({
+          access_token: session.access_token,
+          refresh_token: session.refresh_token
+        });
+        if (result.error) throw result.error;
+      }
+      await loadAndRender();
+      return true;
+    } catch (e) {
+      say('Portal session could not be restored: ' + (e.message || e), 'err');
+      return false;
+    }
   }
 
   form.addEventListener('submit', function (e) {
@@ -104,12 +140,15 @@
     sb.auth.signOut().then(function () { window.location.reload(); });
   });
 
-  sb.auth.getSession().then(function (res) {
-    if (res.data && res.data.session) {
-      loadAndRender();
-    } else {
-      submitEl.disabled = false;
-      say('');
-    }
+  adoptPortalSession().then(function (adopted) {
+    if (adopted) return;
+    sb.auth.getSession().then(function (res) {
+      if (res.data && res.data.session) {
+        loadAndRender();
+      } else {
+        submitEl.disabled = false;
+        say('');
+      }
+    });
   });
 })();
