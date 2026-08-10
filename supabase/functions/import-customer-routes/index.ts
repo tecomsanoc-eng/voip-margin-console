@@ -32,9 +32,11 @@ Deno.serve(async (req) => {
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-  const admin = createClient(supabaseUrl, serviceRoleKey)
+  const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!
+  if (!supabaseUrl || !serviceRoleKey || !anonKey) return json({ error: 'Server Supabase secrets are not configured' }, 500)
 
-  const userClient = createClient(supabaseUrl, Deno.env.get('SUPABASE_ANON_KEY')!, {
+  const admin = createClient(supabaseUrl, serviceRoleKey)
+  const userClient = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: authHeader } },
   })
   const { data: { user }, error: userError } = await userClient.auth.getUser()
@@ -43,7 +45,6 @@ Deno.serve(async (req) => {
   const body = await req.json()
   const rows = body.rows as Row[]
   const sourceFile = String(body.source_file || 'web-upload')
-  const mode = body.mode === 'replace' ? 'replace' : 'append'
   const dryRun = body.dry_run === true
 
   if (!Array.isArray(rows) || rows.length === 0) return json({ error: 'rows must be a non-empty array' }, 400)
@@ -64,31 +65,27 @@ Deno.serve(async (req) => {
   if (dryRun) return json({ ok: true, dry_run: true, rows: rows.length }, 200)
 
   const batchId = crypto.randomUUID()
-  const importRows = rows.map(r => ({
-    ...r,
-    batch_id: batchId,
-    uploaded_by: user.id,
-    source_file: sourceFile,
-  }))
 
-  // Production writes are intentionally explicit. This endpoint is not used by
-  // the normal dashboard and is protected by the authenticated-session check.
-  if (mode === 'replace') {
-    const { error: deleteError } = await admin
+  // Use upsert rather than delete+insert. This is intentionally safe for the
+  // first production test: existing IDs are updated and new IDs are inserted.
+  // No production rows are deleted by this function.
+  const cleanRows = rows.map(r => ({ ...r }))
+
+  for (let i = 0; i < cleanRows.length; i += 500) {
+    const { error } = await admin
       .from('customer_routes')
-      .delete()
-      .neq('id', -1)
-    if (deleteError) return json({ error: 'Replace failed before insert', details: deleteError.message }, 500)
-  }
-
-  for (let i = 0; i < importRows.length; i += 500) {
-    const { error } = await admin.from('customer_routes').insert(importRows.slice(i, i + 500).map(({ batch_id, uploaded_by, source_file, ...r }) => r))
+      .upsert(cleanRows.slice(i, i + 500), { onConflict: 'id' })
     if (error) {
-      return json({ error: 'Database insert failed', details: error.message, batch_id: batchId, rows_attempted: Math.min(i + 500, importRows.length) }, 500)
+      return json({
+        error: 'Database upsert failed',
+        details: error.message,
+        batch_id: batchId,
+        rows_attempted: Math.min(i + 500, cleanRows.length),
+      }, 500)
     }
   }
 
-  return json({ ok: true, batch_id: batchId, rows: rows.length, mode, user_id: user.id }, 200)
+  return json({ ok: true, batch_id: batchId, rows: rows.length, mode: 'upsert', source_file: sourceFile, user_id: user.id }, 200)
 })
 
 function json(data: unknown, status = 200) {
