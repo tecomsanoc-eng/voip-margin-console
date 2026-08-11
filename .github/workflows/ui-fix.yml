@@ -1,0 +1,55 @@
+name: Apply dashboard sidebar layout
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch dashboard index
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('docs/index.html')
+          s=p.read_text(encoding='utf-8')
+          marker='/* DASHBOARD_SIDEBAR_V2 */'
+          if marker in s:
+              print('already patched')
+          else:
+              css=r'''
+/* DASHBOARD_SIDEBAR_V2 */
+.wrap{max-width:none;margin:0;padding:24px 32px 60px 280px;min-height:100vh;position:relative;}
+.wrap::before{content:'VoIP Margin Console\A Operations Portal';white-space:pre;position:fixed;z-index:2;left:0;top:0;bottom:0;width:220px;padding:28px 20px;background:#0b1730;border-right:1px solid #223452;color:#fff;font-size:17px;font-weight:800;line-height:1.6;box-shadow:4px 0 18px rgba(0,0,0,.18);}
+.wrap::after{content:'WORKSPACE\A\A  ▣  Dashboard\A  ⇧  Data Import\A\A EXPLORE\A\A  ◎  Destinations\A  ▥  Providers\A  ♙  Customers\A  ◉  Account Managers\A  ▤  All Carriers\A\A TOOLS\A\A  ⇩  Upload Excel / CSV';white-space:pre;position:fixed;z-index:3;left:0;top:112px;width:220px;padding:0 20px;color:#dbe7ff;font-size:13px;line-height:2.05;pointer-events:none;}
+.tabs{position:fixed;z-index:10;left:0;top:104px;width:220px;height:auto;display:flex;flex-direction:column;gap:6px;margin:0;padding:0 10px;}
+.tab{width:200px;padding:11px 14px;border-radius:9px;border:1px solid transparent;background:transparent;color:#c8d6ee;text-align:left;cursor:pointer;font-size:13px;font-weight:650;}
+.tab:hover{background:#17294a;border-color:#29446d;color:#fff;}
+.tab.active{background:#2457d6;color:#fff;border-color:#2457d6;box-shadow:0 2px 8px rgba(36,87,214,.25);}
+.wrap{display:grid;grid-template-columns:220px minmax(0,1fr);column-gap:28px;}
+.wrap>h1,.wrap>.sub,.wrap>.searchbox,.wrap>.legend,.wrap>#controlBar,.wrap>#summaryBar,.wrap>.table-wrap{grid-column:2;}
+.wrap>h1{grid-row:1;margin-top:0;}
+.wrap>.sub{grid-row:2;}
+.wrap>.tabs{grid-column:1;grid-row:1 / span 12;}
+@media(max-width:900px){.wrap{padding:20px;display:block}.wrap::before,.wrap::after{display:none}.tabs{position:static;width:auto;display:flex;flex-direction:row;overflow-x:auto;margin-bottom:14px;padding:0}.tab{min-width:max-content;width:auto}.signout{top:12px;right:12px}}
+'''
+              s=s.replace('</style>',css+'</style>',1)
+              p.write_text(s,encoding='utf-8')
+          PY
+      - name: Commit patched index
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/index.html
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Fix main index dashboard sidebar layout'
+          git push
+      - name: Remove temporary workflow
+        if: success()
+        run: |
+          rm -f .github/workflows/ui-fix.yml
+          git add .github/workflows/ui-fix.yml
+          git commit -m 'Remove temporary UI patch workflow'
+          git push
