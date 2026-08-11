@@ -99,25 +99,13 @@ tr:hover td{background:rgba(255,255,255,.02);}
   color:var(--muted);font-size:11.5px;font-weight:600;cursor:pointer;
   font-family:var(--sans);}
 .signout:hover{color:var(--accent);border-color:var(--accent);}
+.load-msg{padding:26px 30px;color:var(--muted);font-size:13px;}
+.load-msg.err{color:var(--red);}
 </style>
 </head>
 <body>
-<div class="auth-gate" id="authGate">
-  <form class="auth-card" id="authForm" autocomplete="on">
-    <h2>VoIP Margin Console</h2>
-    <p class="auth-sub">Sign in to load margin data.</p>
-    <input id="authEmail" type="email" placeholder="you@tecomsa.me" required
-           autocomplete="username">
-    <input id="authPassword" type="password" placeholder="Password" required
-           autocomplete="current-password">
-    <button id="authSubmit" type="submit">Sign in</button>
-    <div class="auth-msg" id="authMsg"></div>
-  </form>
-</div>
-<button class="signout" id="signOutBtn" style="display:none;">Sign out</button>
+<div class="load-msg" id="loadMsg">Loading margin data&hellip;</div>
 <div class="wrap" id="appWrap" style="display:none;">
-  <h1>VoIP Margin Console</h1>
-  <div class="sub">Search a destination or a provider &mdash; ranked by profit, then ASR, then rate. Combines LCR, tested traffic, buy/sell margin, and exposure.</div>
 
   <div class="tabs">
     <div class="tab active" id="tabDest">Search by Destination</div>
@@ -831,6 +819,22 @@ searchInput.addEventListener('input', e => {
 });
 }
 window.bootConsole = bootConsole;
+
+/* The portal drives navigation from its sidebar. Expose a named entry point
+ * instead of making the parent reach in and .click() a div on a timer, and
+ * announce readiness so the parent never has to guess when we are up. */
+window.vmSelectTab = function (id) {
+  var el = document.getElementById(id);
+  if (el) { el.click(); return true; }
+  return false;
+};
+window.vmAnnounceReady = function () {
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ source: 'vm-console', type: 'ready' }, window.location.origin);
+    }
+  } catch (e) {}
+};
 </script>
 <script src="./auth.js"></script>
 </body>
