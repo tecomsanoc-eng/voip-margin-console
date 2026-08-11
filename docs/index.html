@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VoIP Margin Console</title>
+<style>
+:root{
+  /* Matched to portal.html so the console reads as one application,
+     not a dark tool embedded inside a light portal. */
+  --bg:#fff; --panel:#f8fafc; --panel2:#f1f5f9; --border:#e3e9f2;
+  --text:#172033; --muted:#64748b; --accent:#2563eb; --accent2:#b45309;
+  --green:#059669; --red:#dc2626; --purple:#7c3aed;
+  --mono:'IBM Plex Mono','SF Mono',Consolas,monospace;
+  --sans:'Inter','Segoe UI',sans-serif;
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;}
+.wrap{max-width:none;margin:0;padding:18px 24px 32px;}
+h1{font-size:21px;font-weight:800;letter-spacing:-.01em;margin:0 0 2px;}
+.sub{color:var(--muted);font-size:12.5px;margin-bottom:18px;}
+/* Navigation lives in the portal sidebar only. The tab elements stay in
+   the DOM so vmSelectTab() can still drive them, but are never shown. */
+.tabs{display:none;}
+/* Explanatory blurb removed from the top of the panel — data only. */
+.legend{display:none;}
+.tab{padding:9px 16px;border-radius:9px;border:1px solid var(--border);background:var(--panel);
+  color:var(--muted);cursor:pointer;font-size:13px;font-weight:600;}
+.tab.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+.searchbox input{
+  width:100%;padding:13px 16px;border-radius:10px;border:1px solid var(--border);
+  background:var(--panel);color:var(--text);font-size:15px;outline:none;font-family:var(--sans);
+}
+.searchbox input:focus{border-color:var(--accent);}
+.suggestions{margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;max-height:110px;overflow-y:auto;}
+.chip{padding:6px 12px;border-radius:20px;background:var(--panel2);border:1px solid var(--border);
+  font-size:12.5px;cursor:pointer;white-space:nowrap;}
+.chip:hover{border-color:var(--accent);color:var(--accent);}
+.chip.active{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:700;}
+.result-count{color:var(--muted);font-size:11.5px;margin:6px 0 0 2px;}
+.summary-bar{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0 14px;}
+.stat{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px 14px;min-width:120px;}
+.stat .v{font-family:var(--mono);font-size:17px;font-weight:700;}
+.stat .l{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-top:2px;}
+.legend{font-size:11px;color:var(--muted);margin:0 0 12px;line-height:1.6;}
+table{width:100%;border-collapse:collapse;font-size:12.5px;}
+.table-wrap{background:var(--panel);border:1px solid var(--border);border-radius:12px;overflow:hidden;}
+.table-scroll{max-height:640px;overflow-y:auto;overflow-x:auto;}
+th{position:sticky;top:0;background:var(--panel2);text-align:left;padding:10px 12px;
+  color:var(--muted);font-weight:700;font-size:10.5px;text-transform:uppercase;letter-spacing:.03em;
+  border-bottom:1px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none;}
+th:hover{color:var(--accent);}
+th.sorted{color:var(--accent);}
+td{padding:9px 12px;border-bottom:1px solid rgba(255,255,255,.04);white-space:nowrap;}
+tr:hover td{background:rgba(255,255,255,.02);}
+.mono{font-family:var(--mono);}
+.provider-name{font-weight:700;}
+.am{color:var(--muted);font-size:11px;}
+.best{position:relative;}
+.best-badge{display:inline-block;background:var(--accent);color:#fff;font-size:9.5px;font-weight:800;
+  padding:2px 7px;border-radius:20px;margin-left:6px;letter-spacing:.02em;}
+.exp-neg{color:var(--green);font-weight:600;}
+.exp-pos{color:var(--red);font-weight:600;}
+.profit-pos{color:var(--green);font-weight:700;}
+.profit-neg{color:var(--red);font-weight:700;}
+.muted{color:var(--muted);}
+.conf{font-size:9px;padding:1px 5px;border-radius:8px;margin-left:4px;}
+.conf.fuzzy,.conf.fuzzy-core{color:var(--accent2);background:rgba(240,185,58,.12);}
+.conf.none{color:var(--red);background:rgba(239,91,91,.12);}
+.empty{padding:34px 20px;text-align:center;color:var(--muted);}
+.dest-tag{display:inline-block;background:var(--panel2);border:1px solid var(--border);border-radius:6px;
+  padding:2px 8px;font-size:11.5px;color:var(--purple);}
+.note{font-size:11px;color:var(--muted);margin:6px 0 16px;line-height:1.5;}
+.control-bar{display:flex;gap:22px;flex-wrap:wrap;align-items:center;margin:16px 0 2px;}
+.ctrl-group{display:flex;gap:6px;align-items:center;}
+.ctrl-label{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-right:2px;}
+.fchip{padding:6px 13px;border-radius:8px;background:var(--panel);border:1px solid var(--border);
+  font-size:12px;cursor:pointer;color:var(--muted);font-weight:600;user-select:none;}
+.fchip:hover{border-color:var(--accent);color:var(--accent);}
+.fchip.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+.am-select{padding:6px 12px;border-radius:8px;background:var(--panel);border:1px solid var(--border);color:var(--text);font-size:12px;font-weight:600;font-family:var(--sans);cursor:pointer;outline:none;max-width:230px;}
+.am-select:focus{border-color:var(--accent);}
+
+/* --- injected by build_app.py: login gate ------------------------------- */
+.auth-gate{position:fixed;inset:0;background:var(--bg);display:flex;
+  align-items:center;justify-content:center;z-index:100;padding:20px;}
+.auth-card{background:var(--panel);border:1px solid var(--border);
+  border-radius:14px;padding:30px 28px;width:100%;max-width:360px;}
+.auth-card h2{margin:0 0 4px;font-size:19px;font-weight:800;
+  letter-spacing:-.01em;}
+.auth-sub{color:var(--muted);font-size:12.5px;margin:0 0 20px;}
+.auth-card input{width:100%;padding:11px 13px;margin-bottom:10px;
+  border-radius:9px;border:1px solid var(--border);background:var(--panel2);
+  color:var(--text);font-size:14px;font-family:var(--sans);outline:none;}
+.auth-card input:focus{border-color:var(--accent);}
+.auth-card button{width:100%;padding:11px;border-radius:9px;border:none;
+  background:var(--accent);color:#fff;font-size:14px;font-weight:700;
+  cursor:pointer;font-family:var(--sans);}
+.auth-card button:disabled{opacity:.55;cursor:default;}
+.auth-msg{margin-top:12px;font-size:12.5px;min-height:17px;line-height:1.5;}
+.auth-msg.err{color:var(--red);}
+.auth-msg.ok{color:var(--muted);}
+.signout{position:fixed;top:16px;right:18px;z-index:50;padding:7px 13px;
+  border-radius:8px;border:1px solid var(--border);background:var(--panel);
+  color:var(--muted);font-size:11.5px;font-weight:600;cursor:pointer;
+  font-family:var(--sans);}
+.signout:hover{color:var(--accent);border-color:var(--accent);}
+.load-msg{padding:26px 30px;color:var(--muted);font-size:13px;}
+.load-msg.err{color:var(--red);}
+</style>
+</head>
+<body>
+<div class="load-msg" id="loadMsg">Loading margin data&hellip;</div>
+<div class="wrap" id="appWrap" style="display:none;">
+
+  <div class="tabs">
+    <div class="tab active" id="tabDest">Search by Destination</div>
+    <div class="tab" id="tabProv">Search by Provider</div>
+    <div class="tab" id="tabCust">Search by Customer</div>
+    <div class="tab" id="tabAm">Account Manager</div>
+    <div class="tab" id="tabAll">All Carriers</div>
+  </div>
+
+  <div class="searchbox">
+    <input id="search" type="text" placeholder="Type a destination... (Albania, Nigeria Mobile, Sudan)" autocomplete="off">
+    <div class="suggestions" id="suggestions"></div>
+    <div class="result-count" id="resultCount"></div>
+  </div>
+
+  <div class="legend" id="legend">
+    <b>Rank</b> = tested &amp; profitable routes first (by profit), then tested-but-unprofitable (by ASR), then untested LCR options (by cheapest rate). Best route per query is marked ★.<br>
+    <span class="exp-neg">green exposure</span> = they owe you &nbsp;·&nbsp; <span class="exp-pos">red exposure</span> = you owe them &nbsp;·&nbsp; click any column header to re-sort.
+  </div>
+
+  <div id="controlBar" class="control-bar" style="display:none;">
+    <div class="ctrl-group" id="amSubGroup" style="display:none;">
+      <span class="ctrl-label">Break down by</span>
+      <div class="fchip active" data-sub="c">Customer</div>
+      <div class="fchip" data-sub="p">Provider</div>
+      <div class="fchip" data-sub="both">Both</div>
+    </div>
+    <div class="ctrl-group" id="roleGroup" style="display:none;">
+      <span class="ctrl-label">Role</span>
+      <div class="fchip active" data-role="all">All</div>
+      <div class="fchip" data-role="customer">Customer</div>
+      <div class="fchip" data-role="provider">Provider</div>
+      <div class="fchip" data-role="both">Both</div>
+    </div>
+    <div class="ctrl-group" id="amFilterGroup" style="display:none;">
+      <span class="ctrl-label">Account manager</span>
+      <select id="amFilterSelect" class="am-select"></select>
+    </div>
+    <div class="ctrl-group" id="dateFilterGroup" style="display:none;">
+      <span class="ctrl-label">Date</span>
+      <select id="dateMonthSelect" class="am-select" style="min-width:130px;"></select>
+      <select id="dateDaySelect" class="am-select" style="min-width:95px;"></select>
+    </div>
+    <div class="ctrl-group" id="destFilterGroup" style="display:none;">
+      <span class="ctrl-label">Destination</span>
+      <input id="destFilterInput" class="am-select" style="min-width:210px;" type="text" placeholder="Filter by destination..." autocomplete="off">
+    </div>
+    <div class="ctrl-group" id="profitGroup">
+      <span class="ctrl-label">Profit</span>
+      <div class="fchip active" data-pf="all">All</div>
+      <div class="fchip" data-pf="pos">Profitable</div>
+      <div class="fchip" data-pf="neg">Loss</div>
+    </div>
+  </div>
+  <div id="summaryBar" class="summary-bar" style="display:none;"></div>
+  <div class="table-wrap">
+    <div class="table-scroll">
+      <table id="resultsTable" style="display:none;">
+        <thead><tr id="headRow"></tr></thead>
+        <tbody id="resultsBody"></tbody>
+      </table>
+      <div class="empty" id="emptyState">Search above to see results.</div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="./config.js"></script>
+<script>
+// Data now arrives from Supabase instead of being baked into this file.
+// Everything below is the original render logic, unchanged, reading the same
+// six objects it always did.
+function bootConsole(DATA){
+const RAW    = DATA.RAW;
+const CUST   = DATA.CUST;
+const AMDATA = DATA.AMDATA;
+const CARR   = DATA.CARR;
+const TRUNK  = DATA.TRUNK;
+const DAILY  = DATA.DAILY;
+const F = RAW.fields; // ['d','p','lcr','buy','sell','profit','profit_pct','asr','acd','calls','dur']
+const IDX = Object.fromEntries(F.map((f,i)=>[f,i]));
+const TRUNK_BY_KEY = {};
+RAW.records.forEach((r,i)=>{ if(TRUNK[i]) TRUNK_BY_KEY[r[IDX.d]+'\u0001'+r[IDX.p]] = TRUNK[i]; });
+const PROVIDERS = RAW.providers; // name -> [am, exposure, credit, terms, conf]
+
+let mode = 'dest'; // 'dest' or 'prov'
+let sortField = null, sortDir = -1;
+
+const allDests = [...new Set(RAW.records.map(r=>r[IDX.d]))].sort();
+const allProvs = Object.keys(PROVIDERS).sort();
+const CUSTOMERS = CUST.customers;          // name -> [am, exposure, credit, terms, conf]
+const CIDX = Object.fromEntries(CUST.fields.map((f,i)=>[f,i]));
+const allCusts = Object.keys(CUSTOMERS).sort();
+const allAms = Object.keys(AMDATA.ams).sort();
+
+const tabDest = document.getElementById('tabDest');
+const tabProv = document.getElementById('tabProv');
+const tabCust = document.getElementById('tabCust');
+const tabAm = document.getElementById('tabAm');
+const tabAll = document.getElementById('tabAll');
+const searchInput = document.getElementById('search');
+const suggestionsEl = document.getElementById('suggestions');
+const resultCountEl = document.getElementById('resultCount');
+const table = document.getElementById('resultsTable');
+const headRow = document.getElementById('headRow');
+const body = document.getElementById('resultsBody');
+const emptyState = document.getElementById('emptyState');
+const summaryBar = document.getElementById('summaryBar');
+const controlBar = document.getElementById('controlBar');
+const legend = document.getElementById('legend');
+const amSubGroup = document.getElementById('amSubGroup');
+const roleGroup = document.getElementById('roleGroup');
+const amFilterGroup = document.getElementById('amFilterGroup');
+const amFilterSelect = document.getElementById('amFilterSelect');
+const dateFilterGroup = document.getElementById('dateFilterGroup');
+const dateMonthSelect = document.getElementById('dateMonthSelect');
+const dateDaySelect = document.getElementById('dateDaySelect');
+const destFilterGroup = document.getElementById('destFilterGroup');
+const destFilterInput = document.getElementById('destFilterInput');
+
+let profitFilter='all', amSub='c', roleFilter='all', carrierQuery='', carrierAmFilter='', destFilter='', dateMonth='', dateDay='';
+function setTab(newMode, placeholder){
+  mode=newMode;
+  [tabDest,tabProv,tabCust,tabAm,tabAll].forEach(t=>t.classList.remove('active'));
+  ({dest:tabDest, prov:tabProv, cust:tabCust, am:tabAm, all:tabAll})[newMode].classList.add('active');
+  searchInput.placeholder=placeholder;
+  searchInput.value=''; suggestionsEl.innerHTML=''; resultCountEl.textContent='';
+  profitFilter='all'; destFilter=''; destFilterInput.value=''; setActiveFilterChips();
+  legend.style.display = (newMode==='dest'||newMode==='prov') ? 'block' : 'none';
+  showEmpty();
+}
+tabDest.onclick = () => setTab('dest','Type a destination... (Albania, Nigeria Mobile, Sudan)');
+tabProv.onclick = () => setTab('prov','Type a provider name... (Ibasis, Tata, 9Eons)');
+tabCust.onclick = () => setTab('cust','Type a customer name... (Globtel, WII Telecom, Virgo)');
+tabAm.onclick   = () => setTab('am','Type an account manager... (Sawam, Mostafa, Amira)');
+tabAll.onclick  = () => { setTab('all','Filter carriers by name...'); selectAll(); };
+function setActiveFilterChips(){
+  document.querySelectorAll('#profitGroup .fchip').forEach(c=>c.classList.toggle('active', c.dataset.pf===profitFilter));
+  document.querySelectorAll('#amSubGroup .fchip').forEach(c=>c.classList.toggle('active', c.dataset.sub===amSub));
+  document.querySelectorAll('#roleGroup .fchip').forEach(c=>c.classList.toggle('active', c.dataset.role===roleFilter));
+}
+document.querySelectorAll('#profitGroup .fchip').forEach(chip=>{
+  chip.onclick=()=>{ profitFilter=chip.dataset.pf; setActiveFilterChips(); refreshView(); };
+});
+document.querySelectorAll('#amSubGroup .fchip').forEach(chip=>{
+  chip.onclick=()=>{ amSub=chip.dataset.sub; setActiveFilterChips(); if(currentMode==='am' && currentSel) selectAM(currentSel); };
+});
+document.querySelectorAll('#roleGroup .fchip').forEach(chip=>{
+  chip.onclick=()=>{ roleFilter=chip.dataset.role; setActiveFilterChips(); renderHead(allColumns()); renderRowsAll(); };
+});
+(function initAmFilter(){
+  const set=new Set();
+  CARR.list.forEach(r=> carrierAms(r).forEach(a=>set.add(a)));
+  const sorted=[...set].sort((a,b)=> a==='Unassigned'?1:(b==='Unassigned'?-1:a.localeCompare(b)));
+  amFilterSelect.innerHTML=['<option value="">All account managers</option>'].concat(sorted.map(a=>`<option value="${a}">${a}</option>`)).join('');
+  amFilterSelect.onchange=()=>{ carrierAmFilter=amFilterSelect.value; renderSummaryAll(); renderRowsAll(); };
+})();
+(function initDateFilter(){
+  const months=[...new Set(DAILY.dates.map(d=>d.slice(0,7)))].sort();
+  const MN=['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const mlabel=m=>{ const [y,mo]=m.split('-'); return MN[+mo-1]+' '+y; };
+  dateMonthSelect.innerHTML=['<option value="">All months</option>'].concat(months.map(m=>`<option value="${m}">${mlabel(m)}</option>`)).join('');
+  dateDaySelect.innerHTML=['<option value="">All days</option>'].concat(Array.from({length:31},(_,i)=>`<option value="${i+1}">${i+1}</option>`)).join('');
+  const oc=()=>{ dateMonth=dateMonthSelect.value; dateDay=dateDaySelect.value; renderSummaryAll(); renderRowsAll(); };
+  dateMonthSelect.onchange=oc; dateDaySelect.onchange=oc;
+})();
+destFilterInput.addEventListener('input', ()=>{ destFilter=destFilterInput.value.trim().toLowerCase(); refreshView(); });
+
+function showEmpty(){
+  table.style.display='none'; emptyState.style.display='block'; summaryBar.style.display='none';
+  controlBar.style.display='none';
+}
+
+function fmtExposure(v){
+  if(v===null||v===undefined) return '<span class="muted">&mdash;</span>';
+  return v<0 ? '<span class="exp-neg">'+v.toFixed(2)+'</span>' : (v>0? '<span class="exp-pos">'+v.toFixed(2)+'</span>' : '0.00');
+}
+function fmtProfit(v){
+  if(v===null||v===undefined) return '<span class="muted">&mdash;</span>';
+  return v>0 ? '<span class="profit-pos">'+v.toFixed(4)+'</span>' : (v<0 ? '<span class="profit-neg">'+v.toFixed(4)+'</span>' : v.toFixed(4));
+}
+function fmtNum(v,d){ return (v===null||v===undefined) ? '<span class="muted">&mdash;</span>' : v.toFixed(d); }
+function fmtInt(v){ return (v===null||v===undefined||v===0) ? '<span class="muted">0</span>' : v.toLocaleString(); }
+
+function tierOf(r){
+  const profit = r[IDX.profit], calls = r[IDX.calls], asr = r[IDX.asr], lcr = r[IDX.lcr];
+  if(profit!==null && profit!==undefined && calls>0){
+    return profit>0 ? {tier:1, val:profit} : {tier:2, val:asr||0};
+  }
+  if(calls>0){ return {tier:2, val:asr||0}; }
+  if(lcr!==null && lcr!==undefined){ return {tier:3, val:-lcr}; }
+  return {tier:4, val:0};
+}
+
+function tierOfCust(r){
+  const profit=r[CIDX.profit], calls=r[CIDX.calls], asr=r[CIDX.asr];
+  if(calls>0){ return profit>0 ? {tier:1, val:profit} : {tier:2, val:asr||0}; }
+  return {tier:3, val:(r[CIDX.sell]!==null&&r[CIDX.sell]!==undefined ? -r[CIDX.sell] : 0)};
+}
+function rankAndSort(records){
+  const tf = currentMode==='cust' ? tierOfCust : tierOf;
+  const withTier = records.map(r => ({r, t: tf(r)}));
+  withTier.sort((a,b) => a.t.tier - b.t.tier || b.t.val - a.t.val);
+  return withTier.map(x=>x.r);
+}
+
+function providerCellHtml(r){
+  const name = r[IDX.p];
+  const trunk = TRUNK_BY_KEY[r[IDX.d]+'\u0001'+name];
+  const hasTrunk = trunk && trunk!==name;
+  const info = PROVIDERS[name] || [null,null,null,null,'none'];
+  const [am, exposure, credit, terms, conf] = info;
+  const confLabel = {'fuzzy':'fuzzy','fuzzy-core':'fuzzy','none':'no match'}[conf] || '';
+  let html = '<div class="provider-name">'+(hasTrunk?trunk:name)+'</div>';
+  html += '<div class="am">'+(hasTrunk? name+' &middot; ' : '')+'AM: '+(am||'&mdash;');
+  if(confLabel) html += '<span class="conf '+(conf==='none'?'none':'fuzzy')+'">'+confLabel+'</span>';
+  html += '</div>';
+  return html;
+}
+
+const COLS_DEST = [
+  {k:'rank', label:'#', w:'34px'},
+  {k:'provider', label:'Trunk / Provider'},
+  {k:'lcr', label:'LCR Rate'},
+  {k:'buy', label:'Buy'},
+  {k:'sell', label:'Sell'},
+  {k:'profit', label:'Profit'},
+  {k:'profit_pct', label:'Profit %'},
+  {k:'asr', label:'ASR'},
+  {k:'acd', label:'ACD'},
+  {k:'calls', label:'Calls'},
+  {k:'exposure', label:'Exposure'},
+];
+const COLS_PROV = [
+  {k:'rank', label:'#', w:'34px'},
+  {k:'destination', label:'Destination'},
+  {k:'lcr', label:'LCR Rate'},
+  {k:'buy', label:'Buy'},
+  {k:'sell', label:'Sell'},
+  {k:'profit', label:'Profit'},
+  {k:'profit_pct', label:'Profit %'},
+  {k:'asr', label:'ASR'},
+  {k:'acd', label:'ACD'},
+  {k:'calls', label:'Calls'},
+];
+const COLS_CUST = [
+  {k:'rank', label:'#', w:'34px'},
+  {k:'destination', label:'Destination'},
+  {k:'cprovider', label:'Route / Provider'},
+  {k:'sell', label:'Sell Rate'},
+  {k:'buy', label:'Buy Rate'},
+  {k:'profit', label:'Profit'},
+  {k:'profit_pct', label:'Profit %'},
+  {k:'asr', label:'ASR'},
+  {k:'acd', label:'ACD'},
+  {k:'calls', label:'Calls'},
+  {k:'rev', label:'Revenue'},
+];
+const COLS_AM_C = [
+  {k:'rank', label:'#', w:'34px'},
+  {k:'amname', label:'Customer'},
+  {k:'profit', label:'Profit'},
+  {k:'dur', label:'Minutes'},
+  {k:'act', label:'Activity %'},
+  {k:'calls', label:'Calls'},
+  {k:'rev', label:'Revenue'},
+  {k:'routes', label:'Routes'},
+  {k:'sec', label:'Providers'},
+];
+const COLS_AM_P = [
+  {k:'rank', label:'#', w:'34px'},
+  {k:'amname', label:'Provider'},
+  {k:'profit', label:'Profit'},
+  {k:'dur', label:'Minutes'},
+  {k:'act', label:'Activity %'},
+  {k:'calls', label:'Calls'},
+  {k:'exp', label:'Expense'},
+  {k:'routes', label:'Routes'},
+  {k:'sec', label:'Customers'},
+];
+const COLS_AM_BOTH = [
+  {k:'rank', label:'#', w:'34px'},
+  {k:'type', label:'Type'},
+  {k:'amname', label:'Name'},
+  {k:'profit', label:'Profit'},
+  {k:'dur', label:'Minutes'},
+  {k:'act', label:'Activity %'},
+  {k:'calls', label:'Calls'},
+  {k:'rev', label:'Revenue'},
+  {k:'exp', label:'Expense'},
+  {k:'routes', label:'Routes'},
+];
+const AM_IDX = {profit:1, calls:2, act:3, dur:3, rev:4, exp:5, routes:6, sec:7};
+const COLS_ALL = [
+  {k:'rank', label:'#', w:'34px'},
+  {k:'aname', label:'Carrier'},
+  {k:'role', label:'Role'},
+  {k:'amc', label:'Account Manager'},
+  {k:'dur', label:'Minutes'},
+  {k:'act', label:'Activity %'},
+  {k:'calls', label:'Calls'},
+  {k:'rev', label:'Revenue'},
+  {k:'exp', label:'Expense'},
+  {k:'profit', label:'Profit'},
+  {k:'due', label:'Inv. Due Date'},
+  {k:'netbal', label:'Net Balance'},
+  {k:'curexp', label:'Current Exposure'},
+];
+const ALL_IDX = {dur:3, act:3, calls:4, rev:5, exp:10, profit:6, netbal:8, curexp:9};
+function allColumns(){
+  return COLS_ALL.filter(c=>{
+    if(c.k==='rev' && roleFilter==='provider') return false;
+    if(c.k==='exp' && roleFilter==='customer') return false;
+    return true;
+  });
+}
+
+function renderHead(cols){
+  headRow.innerHTML = cols.map(c => `<th data-k="${c.k}" style="${c.w?'width:'+c.w:''}">${c.label}</th>`).join('');
+  headRow.querySelectorAll('th').forEach(th => {
+    th.onclick = () => {
+      const k = th.dataset.k;
+      if(['rank','provider','destination','cprovider','amname','type','aname','role','amc','due'].includes(k)) return;
+      if(sortField===k) sortDir = -sortDir; else { sortField=k; sortDir=-1; }
+      renderCurrent();
+    };
+  });
+}
+
+let currentRecords = [], currentMode='dest', currentAmProvOrDest = '', currentSel='';
+
+function computeSummary(records){
+  const tested = records.filter(r=>r[IDX.calls]>0);
+  const totalProfit = tested.reduce((s,r)=> s + (r[IDX.profit]||0), 0);
+  const avgAsr = tested.length ? tested.reduce((s,r)=>s+(r[IDX.asr]||0),0)/tested.length : 0;
+  const cheapest = records.filter(r=>r[IDX.lcr]!==null).sort((a,b)=>a[IDX.lcr]-b[IDX.lcr])[0];
+  return {count: records.length, tested: tested.length, totalProfit, avgAsr, cheapest};
+}
+
+function renderSummary(s){
+  summaryBar.style.display='flex';
+  summaryBar.innerHTML = `
+    <div class="stat"><div class="v">${s.count}</div><div class="l">Options found</div></div>
+    <div class="stat"><div class="v">${s.tested}</div><div class="l">Already tested</div></div>
+    <div class="stat"><div class="v ${s.totalProfit>=0?'profit-pos':'profit-neg'}">${s.totalProfit.toFixed(2)}</div><div class="l">Total profit</div></div>
+    <div class="stat"><div class="v">${s.avgAsr.toFixed(1)}%</div><div class="l">Avg ASR (tested)</div></div>
+    <div class="stat"><div class="v mono">${s.cheapest ? s.cheapest[IDX.lcr].toFixed(4) : '&mdash;'}</div><div class="l">Cheapest LCR rate</div></div>
+  `;
+}
+
+function renderRows(records, mode){
+  const M = (mode==='cust') ? CIDX : IDX;
+  let rows;
+  if(sortField){
+    rows = [...records].sort((a,b) => {
+      const av=a[M[sortField]], bv=b[M[sortField]];
+      if(av===null||av===undefined) return 1;
+      if(bv===null||bv===undefined) return -1;
+      return sortDir*(av-bv);
+    });
+  } else {
+    rows = rankAndSort(records);
+  }
+  if(mode==='cust'){
+    body.innerHTML = rows.map((r,i) => {
+      const isBest = (i===0 && !sortField);
+      return `<tr>
+        <td class="mono muted">${i+1}${isBest?'<span class="best-badge">BEST</span>':''}</td>
+        <td><span class="dest-tag">${r[CIDX.d]}</span></td>
+        <td class="am">${r[CIDX.p]}</td>
+        <td class="mono">${fmtNum(r[CIDX.sell],5)}</td>
+        <td class="mono">${fmtNum(r[CIDX.buy],5)}</td>
+        <td class="mono">${fmtProfit(r[CIDX.profit])}</td>
+        <td class="mono">${r[CIDX.profit_pct]!==null&&r[CIDX.profit_pct]!==undefined ? r[CIDX.profit_pct].toFixed(1)+'%':'<span class="muted">&mdash;</span>'}</td>
+        <td class="mono">${r[CIDX.asr]!==null&&r[CIDX.asr]!==undefined ? r[CIDX.asr].toFixed(1)+'%':'<span class="muted">&mdash;</span>'}</td>
+        <td class="mono">${fmtNum(r[CIDX.acd],2)}</td>
+        <td class="mono">${fmtInt(r[CIDX.calls])}</td>
+        <td class="mono">${fmtNum(r[CIDX.rev],2)}</td>
+      </tr>`;
+    }).join('');
+    return;
+  }
+  body.innerHTML = rows.map((r,i) => {
+    const isBest = (i===0 && !sortField);
+    const nameCell = mode==='dest'
+      ? providerCellHtml(r)
+      : `<span class="dest-tag">${r[IDX.d]}</span>`;
+    return `<tr>
+      <td class="mono muted">${i+1}${isBest?'<span class="best-badge">BEST</span>':''}</td>
+      <td>${nameCell}</td>
+      <td class="mono">${fmtNum(r[IDX.lcr],4)}</td>
+      <td class="mono">${fmtNum(r[IDX.buy],4)}</td>
+      <td class="mono">${fmtNum(r[IDX.sell],4)}</td>
+      <td class="mono">${fmtProfit(r[IDX.profit])}</td>
+      <td class="mono">${r[IDX.profit_pct]!==null&&r[IDX.profit_pct]!==undefined ? r[IDX.profit_pct].toFixed(1)+'%':'<span class="muted">&mdash;</span>'}</td>
+      <td class="mono">${r[IDX.asr]!==null&&r[IDX.asr]!==undefined ? r[IDX.asr].toFixed(1)+'%':'<span class="muted">&mdash;</span>'}</td>
+      <td class="mono">${fmtNum(r[IDX.acd],2)}</td>
+      <td class="mono">${fmtInt(r[IDX.calls])}</td>
+      ${mode==='dest' ? '<td class="mono">'+fmtExposure((PROVIDERS[r[IDX.p]]||[])[1])+'</td>' : ''}
+    </tr>`;
+  }).join('');
+}
+
+function profitOf(r){
+  if(currentMode==='am') return amSub==='both' ? r.row[1] : r[1];
+  if(currentMode==='cust') return r[CIDX.profit];
+  return r[IDX.profit];
+}
+function destOf(r){
+  if(currentMode==='cust') return r[CIDX.d];
+  if(currentMode==='prov') return r[IDX.d];
+  return null;
+}
+function filterRecords(records){
+  let out = records;
+  if(destFilter && (currentMode==='prov'||currentMode==='cust')){
+    out = out.filter(r=>{ const d=destOf(r); return d && d.toLowerCase().includes(destFilter); });
+  }
+  if(profitFilter!=='all'){
+    out = out.filter(r=>{ const p=profitOf(r); if(p===null||p===undefined) return false; return profitFilter==='pos'?p>0:p<0; });
+  }
+  return out;
+}
+function refreshView(){
+  if(!currentSel) return;
+  if(currentMode==='all'){ renderRowsAll(); return; }
+  const recs = filterRecords(currentRecords);
+  if(currentMode==='am'){ renderSummaryAM(); renderRowsAM(recs); return; }
+  if(currentMode==='cust'){ renderSummaryCust(computeSummaryCust(recs), currentSel); renderRows(recs,'cust'); return; }
+  renderSummary(computeSummary(recs)); renderRows(recs, currentMode);
+}
+function renderCurrent(){ refreshView(); }
+function renderRowsAM(recs){
+  const both = amSub==='both';
+  const P = both ? (x=>x.row) : (x=>x);
+  const durAll = currentRecords.reduce((s,x)=> s + (P(x)[3]||0), 0);
+  const actPct = d => durAll>0 ? '<span class="mono">'+(100*d/durAll).toFixed(1)+'%</span>' : '<span class="muted">0%</span>';
+  let rows;
+  if(sortField && AM_IDX[sortField]!==undefined){
+    rows=[...recs].sort((a,b)=>{ const av=P(a)[AM_IDX[sortField]], bv=P(b)[AM_IDX[sortField]];
+      if(av===null||av===undefined) return 1; if(bv===null||bv===undefined) return -1; return sortDir*(av-bv); });
+  } else {
+    rows=[...recs].sort((a,b)=> P(b)[1]-P(a)[1]);
+  }
+  body.innerHTML = rows.map((x,i)=>{
+    const r=P(x); const isBest=(i===0 && !sortField);
+    if(both){
+      const tag = x.type==='C' ? '<span class="dest-tag">Customer</span>'
+                                : '<span class="dest-tag" style="color:var(--accent2)">Provider</span>';
+      return `<tr>
+        <td class="mono muted">${i+1}${isBest?'<span class="best-badge">TOP</span>':''}</td>
+        <td>${tag}</td>
+        <td class="provider-name">${r[0]}</td>
+        <td class="mono">${fmtProfit(r[1])}</td>
+        <td class="mono">${fmtInt(Math.round(r[3]))}</td>
+        <td>${actPct(r[3])}</td>
+        <td class="mono">${fmtInt(r[2])}</td>
+        <td class="mono">${r[4].toFixed(2)}</td>
+        <td class="mono">${r[5].toFixed(2)}</td>
+        <td class="mono">${fmtInt(r[6])}</td>
+      </tr>`;
+    }
+    return `<tr>
+      <td class="mono muted">${i+1}${isBest?'<span class="best-badge">TOP</span>':''}</td>
+      <td class="provider-name">${r[0]}</td>
+      <td class="mono">${fmtProfit(r[1])}</td>
+      <td class="mono">${fmtInt(Math.round(r[3]))}</td>
+      <td>${actPct(r[3])}</td>
+      <td class="mono">${fmtInt(r[2])}</td>
+      <td class="mono">${(amSub==='p'?r[5]:r[4]).toFixed(2)}</td>
+      <td class="mono">${fmtInt(r[6])}</td>
+      <td class="mono">${fmtInt(r[7])}</td>
+    </tr>`;
+  }).join('');
+}
+function renderSummaryAM(){
+  const data=AMDATA.ams[currentSel]||{c:[],p:[],n:0};
+  const cN=data.c.length, cP=data.c.filter(r=>r[1]>0).length;
+  const pN=data.p.length, pP=data.p.filter(r=>r[1]>0).length;
+  const totProfit=data.c.reduce((s,r)=>s+r[1],0);
+  const totRev=data.c.reduce((s,r)=>s+r[4],0);
+  const totExp=data.p.reduce((s,r)=>s+r[5],0);
+  const cMin=data.c.reduce((s,r)=>s+r[3],0), pMin=data.p.reduce((s,r)=>s+r[3],0);
+  const totMin = amSub==='c'?cMin : (amSub==='p'?pMin : cMin+pMin);
+  const cPct=cN?100*cP/cN:0, pPct=pN?100*pP/pN:0;
+  const cAct=data.c.filter(r=>r[2]>0).length, pAct=data.p.filter(r=>r[2]>0).length;
+  const curN = amSub==='p'?pN:cN, curAct = amSub==='p'?pAct:cAct;
+  const actPct = curN?100*curAct/curN:0;
+  let html=`<div class="stat"><div class="v">${data.n||0}</div><div class="l">Total carriers</div></div>`;
+  if(amSub==='c'){
+    html+=`
+      <div class="stat"><div class="v">${cN}</div><div class="l">As customer</div></div>
+      <div class="stat"><div class="v profit-pos">${cP}</div><div class="l">Profitable</div></div>
+      <div class="stat"><div class="v">${cPct.toFixed(1)}%</div><div class="l">% profitable</div></div>`;
+  } else if(amSub==='p'){
+    html+=`
+      <div class="stat"><div class="v">${pN}</div><div class="l">As vendor</div></div>
+      <div class="stat"><div class="v profit-pos">${pP}</div><div class="l">Profitable</div></div>
+      <div class="stat"><div class="v">${pPct.toFixed(1)}%</div><div class="l">% profitable</div></div>`;
+  } else {
+    html+=`
+      <div class="stat"><div class="v">${cP}/${cN} <span class="muted" style="font-size:12px">(${cPct.toFixed(0)}%)</span></div><div class="l">Profitable customers</div></div>
+      <div class="stat"><div class="v">${pP}/${pN} <span class="muted" style="font-size:12px">(${pPct.toFixed(0)}%)</span></div><div class="l">Profitable vendors</div></div>`;
+  }
+  html+=`
+    <div class="stat"><div class="v">${actPct.toFixed(1)}%</div><div class="l">${amSub==='p'?'Vendors active':'Customers active'}</div></div>
+    <div class="stat"><div class="v mono">${Math.round(totMin).toLocaleString()}</div><div class="l">Total minutes</div></div>
+    <div class="stat"><div class="v ${totProfit>=0?'profit-pos':'profit-neg'}">${totProfit.toFixed(2)}</div><div class="l">Total profit</div></div>
+    ${amSub!=='p' ? '<div class="stat"><div class="v mono">'+totRev.toFixed(2)+'</div><div class="l">Total revenue</div></div>' : ''}
+    ${amSub!=='c' ? '<div class="stat"><div class="v mono">'+totExp.toFixed(2)+'</div><div class="l">Total expense</div></div>' : ''}`;
+  summaryBar.style.display='flex';
+  summaryBar.innerHTML=html;
+}
+function selectAll(){
+  currentMode='all'; currentSel='__all__'; carrierQuery=''; roleFilter='all'; carrierAmFilter=''; sortField=null;
+  amFilterSelect.value=''; dateMonth=''; dateDay=''; dateMonthSelect.value=''; dateDaySelect.value='';
+  renderHead(allColumns());
+  table.style.display='table'; emptyState.style.display='none';
+  controlBar.style.display='flex';
+  amSubGroup.style.display='none'; roleGroup.style.display='flex'; amFilterGroup.style.display='flex'; destFilterGroup.style.display='none'; dateFilterGroup.style.display='flex';
+  setActiveFilterChips();
+  renderSummaryAll(); renderRowsAll();
+}
+function carrierAms(r){ return r[2]==='Unassigned' ? ['Unassigned'] : r[2].split('; '); }
+function dateFilterActive(){ return dateMonth!=='' || dateDay!==''; }
+function matchingDateIdx(){
+  const s=new Set();
+  DAILY.dates.forEach((d,i)=>{
+    if(dateMonth && !d.startsWith(dateMonth)) return;
+    if(dateDay && parseInt(d.slice(8,10),10)!==parseInt(dateDay,10)) return;
+    s.add(i);
+  });
+  return s;
+}
+function dateFilteredCarrierList(){
+  const idx=matchingDateIdx(); const out=[];
+  for(const r of CARR.list){
+    const ent=DAILY.byCarrier[r[0]];
+    let cRev=0,cProf=0,cDur=0,cCalls=0,pExp=0,pProf=0,pDur=0,pCalls=0;
+    if(ent) for(const e of ent){ if(idx.has(e[0])){ cRev+=e[1];cProf+=e[2];cDur+=e[3];cCalls+=e[4]; pExp+=e[5];pProf+=e[6];pDur+=e[7];pCalls+=e[8]; } }
+    const dur=cDur+pDur, calls=cCalls+pCalls;
+    if(dur<=0 && calls<=0) continue;
+    const profit=(r[1]==='provider')?pProf:cProf;
+    out.push([r[0], r[1], r[2], Math.round(dur*10)/10, calls, Math.round(cRev*100)/100, Math.round(profit*10000)/10000, r[7], r[8], r[9], Math.round(pExp*100)/100]);
+  }
+  return out;
+}
+function baseCarrierList(){ return dateFilterActive() ? dateFilteredCarrierList() : CARR.list; }
+function amFilteredList(){
+  const base=baseCarrierList();
+  return carrierAmFilter ? base.filter(r=>carrierAms(r).includes(carrierAmFilter)) : base;
+}
+function renderSummaryAll(){
+  const base=amFilteredList();
+  const c={
+    total:base.length,
+    asCustomer:base.filter(r=>r[1]==='customer'||r[1]==='both').length,
+    asProvider:base.filter(r=>r[1]==='provider'||r[1]==='both').length,
+    both:base.filter(r=>r[1]==='both').length,
+    custOnly:base.filter(r=>r[1]==='customer').length,
+    provOnly:base.filter(r=>r[1]==='provider').length,
+  };
+  const totMin=base.reduce((s,r)=>s+r[3],0);
+  const active=base.filter(r=>r[3]>0||r[4]>0).length;
+  const inactive=c.total-active;
+  const activePct=c.total?100*active/c.total:0;
+  const dateOn=dateFilterActive();
+  const totRev=base.reduce((s,r)=>s+(r[5]||0),0), totProfit=base.reduce((s,r)=>s+(r[6]||0),0);
+  let head=`<div class="stat"><div class="v">${c.total}</div><div class="l">${dateOn?'Carriers in period':'Total carriers'}</div></div>`;
+  if(dateOn){
+    head+=`
+    <div class="stat"><div class="v mono">${Math.round(totRev).toLocaleString()}</div><div class="l">Period revenue</div></div>
+    <div class="stat"><div class="v ${totProfit>=0?'profit-pos':'profit-neg'}">${Math.round(totProfit).toLocaleString()}</div><div class="l">Period profit</div></div>`;
+  } else {
+    head+=`
+    <div class="stat"><div class="v profit-pos">${activePct.toFixed(1)}%</div><div class="l">Carriers active</div></div>
+    <div class="stat"><div class="v">${active} <span class="muted" style="font-size:12px">/ ${inactive} idle</span></div><div class="l">Active / inactive</div></div>`;
+  }
+  summaryBar.style.display='flex';
+  summaryBar.innerHTML=head+`
+    <div class="stat"><div class="v">${c.asCustomer}</div><div class="l">As customer</div></div>
+    <div class="stat"><div class="v">${c.asProvider}</div><div class="l">As provider</div></div>
+    <div class="stat"><div class="v" style="color:var(--purple)">${c.both}</div><div class="l">Both (counted once)</div></div>
+    <div class="stat"><div class="v">${c.custOnly}</div><div class="l">Customer only</div></div>
+    <div class="stat"><div class="v">${c.provOnly}</div><div class="l">Provider only</div></div>
+    <div class="stat"><div class="v mono">${Math.round(totMin).toLocaleString()}</div><div class="l">Total minutes</div></div>`;
+}
+function renderRowsAll(){
+  const base = amFilteredList();
+  const baseMin = base.reduce((s,r)=>s+r[3],0);
+  const actPct = d => baseMin>0 ? '<span class="mono">'+(100*d/baseMin).toFixed(1)+'%</span>' : '<span class="muted">0%</span>';
+  let rows = base.filter(r=>{
+    if(roleFilter==='customer' && !(r[1]==='customer'||r[1]==='both')) return false;
+    if(roleFilter==='provider' && !(r[1]==='provider'||r[1]==='both')) return false;
+    if(roleFilter==='both' && r[1]!=='both') return false;
+    if(profitFilter!=='all'){ const p=r[6]; if(p===null||p===undefined) return false;
+      if(profitFilter==='pos' && !(p>0)) return false; if(profitFilter==='neg' && !(p<0)) return false; }
+    if(carrierQuery && !r[0].toLowerCase().includes(carrierQuery)) return false;
+    return true;
+  });
+  if(sortField && ALL_IDX[sortField]!==undefined){
+    rows=[...rows].sort((a,b)=> sortDir*((a[ALL_IDX[sortField]]||0)-(b[ALL_IDX[sortField]]||0)));
+  } else {
+    rows=[...rows].sort((a,b)=> b[3]-a[3]);
+  }
+  resultCountEl.textContent = rows.length+' carrier'+(rows.length===1?'':'s')+(carrierAmFilter?' \u00b7 '+carrierAmFilter:'');
+  const badge = role => {
+    const m={customer:['Customer','var(--accent)'], provider:['Provider','var(--accent2)'], both:['Both','var(--purple)']};
+    const x=m[role]||['?','var(--muted)']; return '<span class="dest-tag" style="color:'+x[1]+'">'+x[0]+'</span>';
+  };
+  body.innerHTML = rows.map((r,i)=>`<tr>
+    <td class="mono muted">${i+1}</td>
+    <td class="provider-name">${r[0]}</td>
+    <td>${badge(r[1])}</td>
+    <td class="am">${r[2]}</td>
+    <td class="mono">${fmtInt(Math.round(r[3]))}</td>
+    <td>${actPct(r[3])}</td>
+    <td class="mono">${fmtInt(r[4])}</td>
+    ${roleFilter!=='provider' ? '<td class="mono">'+r[5].toFixed(2)+'</td>' : ''}
+    ${roleFilter!=='customer' ? '<td class="mono">'+r[10].toFixed(2)+'</td>' : ''}
+    <td class="mono">${fmtProfit(r[6])}</td>
+    <td class="mono muted">${r[7]||'&mdash;'}</td>
+    <td class="mono">${(r[8]!==null&&r[8]!==undefined)?fmtExposure(r[8]):'<span class="muted">&mdash;</span>'}</td>
+    <td class="mono">${(r[9]!==null&&r[9]!==undefined)?fmtExposure(r[9]):'<span class="muted">&mdash;</span>'}</td>
+  </tr>`).join('');
+}
+
+function afterSelect(cols){
+  sortField=null; renderHead(cols);
+  table.style.display='table'; emptyState.style.display='none';
+  controlBar.style.display='flex';
+  amSubGroup.style.display = currentMode==='am' ? 'flex' : 'none';
+  roleGroup.style.display='none';
+  amFilterGroup.style.display='none'; dateFilterGroup.style.display='none';
+  destFilter=''; destFilterInput.value='';
+  destFilterGroup.style.display = (currentMode==='prov'||currentMode==='cust') ? 'flex' : 'none';
+  refreshView();
+}
+function selectDestination(dest){
+  currentMode='dest'; currentSel=dest;
+  currentRecords = RAW.records.filter(r=>r[IDX.d]===dest);
+  afterSelect(COLS_DEST);
+}
+function selectProvider(prov){
+  currentMode='prov'; currentSel=prov;
+  currentRecords = RAW.records.filter(r=>r[IDX.p]===prov);
+  afterSelect(COLS_PROV);
+}
+function computeSummaryCust(records){
+  const tested = records.filter(r=>r[CIDX.calls]>0);
+  const totalProfit = records.reduce((s,r)=> s + (r[CIDX.profit]||0), 0);
+  const totalRev = records.reduce((s,r)=> s + (r[CIDX.rev]||0), 0);
+  const avgAsr = tested.length ? tested.reduce((s,r)=>s+(r[CIDX.asr]||0),0)/tested.length : 0;
+  return {count: records.length, tested: tested.length, totalProfit, totalRev, avgAsr};
+}
+function renderSummaryCust(s, custName){
+  const info = CUSTOMERS[custName] || [null,null,null,null,'none'];
+  const [am, exposure, credit, terms, conf] = info;
+  const confLabel = {'fuzzy':'fuzzy','none':'no match'}[conf] || '';
+  summaryBar.style.display='flex';
+  summaryBar.innerHTML = `
+    <div class="stat"><div class="v">${s.count}</div><div class="l">Routes found</div></div>
+    <div class="stat"><div class="v">${s.tested}</div><div class="l">With traffic</div></div>
+    <div class="stat"><div class="v ${s.totalProfit>=0?'profit-pos':'profit-neg'}">${s.totalProfit.toFixed(2)}</div><div class="l">Total profit</div></div>
+    <div class="stat"><div class="v mono">${s.totalRev.toFixed(2)}</div><div class="l">Total revenue</div></div>
+    <div class="stat"><div class="v">${s.avgAsr.toFixed(1)}%</div><div class="l">Avg ASR (traffic)</div></div>
+    <div class="stat"><div class="v" style="font-size:13px;">${am||'&mdash;'}</div><div class="l">Account manager</div></div>
+    <div class="stat"><div class="v mono">${(exposure!==null&&exposure!==undefined)?exposure.toFixed(2):'<span class=\'muted\'>&mdash;</span>'}</div><div class="l">Exposure${confLabel?' ('+confLabel+')':''}</div></div>
+    <div class="stat"><div class="v mono">${(credit!==null&&credit!==undefined)?credit.toLocaleString():'<span class=\'muted\'>&mdash;</span>'}</div><div class="l">Credit limit</div></div>
+    <div class="stat"><div class="v" style="font-size:13px;">${terms||'<span class=\'muted\'>&mdash;</span>'}</div><div class="l">Payment terms</div></div>
+  `;
+}
+function selectCustomer(cust){
+  currentMode='cust'; currentSel=cust;
+  currentRecords = CUST.records.filter(r=>r[CIDX.c]===cust);
+  afterSelect(COLS_CUST);
+}
+function selectAM(am){
+  currentMode='am'; currentSel=am;
+  const data = AMDATA.ams[am] || {c:[],p:[]};
+  if(amSub==='both'){
+    currentRecords = [...data.c.map(r=>({type:'C',row:r})), ...data.p.map(r=>({type:'P',row:r}))];
+    afterSelect(COLS_AM_BOTH);
+  } else {
+    currentRecords = amSub==='c' ? data.c : data.p;
+    afterSelect(amSub==='c' ? COLS_AM_C : COLS_AM_P);
+  }
+}
+
+function updateSuggestions(q){
+  suggestionsEl.innerHTML='';
+  if(!q){ resultCountEl.textContent=''; return; }
+  const ql=q.toLowerCase();
+  const pool = mode==='dest' ? allDests : (mode==='prov' ? allProvs : (mode==='cust' ? allCusts : allAms));
+  const matches = pool.filter(x=>x.toLowerCase().includes(ql)).slice(0,40);
+  resultCountEl.textContent = matches.length+' match'+(matches.length===1?'':'es')+(matches.length===40?' (first 40)':'');
+  matches.forEach(x => {
+    const chip = document.createElement('div');
+    chip.className='chip'; chip.textContent=x;
+    chip.onclick = () => {
+      document.querySelectorAll('.chip').forEach(c=>c.classList.remove('active'));
+      chip.classList.add('active');
+      mode==='dest' ? selectDestination(x) : (mode==='prov' ? selectProvider(x) : (mode==='cust' ? selectCustomer(x) : selectAM(x)));
+    };
+    suggestionsEl.appendChild(chip);
+  });
+}
+searchInput.addEventListener('input', e => {
+  if(mode==='all'){ carrierQuery=e.target.value.trim().toLowerCase(); renderRowsAll(); }
+  else updateSuggestions(e.target.value.trim());
+});
+}
+window.bootConsole = bootConsole;
+
+/* The portal drives navigation from its sidebar. Expose a named entry point
+ * instead of making the parent reach in and .click() a div on a timer, and
+ * announce readiness so the parent never has to guess when we are up. */
+window.vmSelectTab = function (id) {
+  var el = document.getElementById(id);
+  if (el) { el.click(); return true; }
+  return false;
+};
+window.vmAnnounceReady = function () {
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ source: 'vm-console', type: 'ready' }, window.location.origin);
+    }
+  } catch (e) {}
+};
+</script>
+<script src="./auth.js"></script>
+</body>
+</html>
