@@ -14,6 +14,7 @@ public/payload.json
 *.xls
 *.xlsx
 exports/
+out/
 
 # Secrets. supabase/.env holds the service_role key, which bypasses RLS.
 supabase/.env
