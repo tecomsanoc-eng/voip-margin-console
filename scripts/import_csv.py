@@ -81,7 +81,7 @@ def coerce(value, kind, table, column, line_no):
 
 
 def read_csv(table, path):
-    pk, columns = SCHEMA[table]
+    pk, columns = SCHEMA[table[:-5] if table.endswith("_next") else table]
 
     with open(path, "r", encoding="utf-8-sig", newline="") as fh:
         reader = csv.DictReader(fh)
@@ -111,7 +111,7 @@ def read_csv(table, path):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("table", choices=sorted(SCHEMA))
+    ap.add_argument("table", choices=sorted(list(SCHEMA) + [t + "_next" for t in SCHEMA]))
     ap.add_argument("csv_path")
     ap.add_argument("--append", action="store_true",
                     help="add to the table instead of replacing its contents")

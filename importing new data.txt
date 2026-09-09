@@ -1,0 +1,7 @@
+cd C:\Users\Mohammed\voip-margin-console
+python scripts\build_weekly.py exports\ out\
+
+
+
+
+foreach ($t in "routes","customer_routes","carriers","providers","customers","am_breakdown","am_totals","daily_carrier") { python scripts\import_csv.py $t "out\$t.csv" }

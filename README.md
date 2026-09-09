@@ -61,7 +61,7 @@ cannot be triggered on the published site.
 
 2. **Dashboard → SQL Editor → New query**, paste all of
    [`supabase/schema.sql`](supabase/schema.sql), run it. This creates the
-   tables, turns on row level security, and creates `get_console_payload()`.
+   tables, turns o n row level security, and creates `get_console_payload()`.
 
 3. **Project Settings → API**, copy two values:
    - *Project URL* and *anon public* key → into
