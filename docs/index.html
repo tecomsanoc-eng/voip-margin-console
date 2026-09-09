@@ -260,7 +260,12 @@ document.querySelectorAll('#amSubGroup .fchip').forEach(chip=>{
   chip.onclick=()=>{ amSub=chip.dataset.sub; setActiveFilterChips(); if(currentMode==='am' && currentSel) selectAM(currentSel); };
 });
 document.querySelectorAll('#roleGroup .fchip').forEach(chip=>{
-  chip.onclick=()=>{ roleFilter=chip.dataset.role; setActiveFilterChips(); renderHead(allColumns()); renderRowsAll(); };
+  chip.onclick=()=>{
+    roleFilter=chip.dataset.role;
+    if(roleFilter==='provider' && sortField==='rev') sortField='exp';
+    if(roleFilter==='customer' && sortField==='exp') sortField='rev';
+    setActiveFilterChips(); renderHead(allColumns()); renderSummaryAll(); renderRowsAll();
+  };
 });
 (function initAmFilter(){
   const set=new Set();
@@ -537,7 +542,7 @@ function filterRecords(records){
 }
 function refreshView(){
   if(!currentSel) return;
-  if(currentMode==='all'){ renderRowsAll(); return; }
+  if(currentMode==='all'){ renderSummaryAll(); renderRowsAll(); return; }
   const recs = filterRecords(currentRecords);
   if(currentMode==='am'){ renderSummaryAM(); renderRowsAM(recs); return; }
   if(currentMode==='cust'){ renderSummaryCust(computeSummaryCust(recs), currentSel); renderRows(recs,'cust'); return; }
@@ -646,44 +651,65 @@ function matchingDateIdx(){
   });
   return s;
 }
-function dateFilteredCarrierList(){
+function dateFilteredCarrierList(side=roleFilter){
   const idx=matchingDateIdx(); const out=[];
   for(const r of CARR.list){
     const ent=DAILY.byCarrier[r[0]];
     let cRev=0,cProf=0,cDur=0,cCalls=0,pExp=0,pProf=0,pDur=0,pCalls=0;
     if(ent) for(const e of ent){ if(idx.has(e[0])){ cRev+=e[1];cProf+=e[2];cDur+=e[3];cCalls+=e[4]; pExp+=e[5];pProf+=e[6];pDur+=e[7];pCalls+=e[8]; } }
-    const dur=cDur+pDur, calls=cCalls+pCalls;
-    if(dur<=0 && calls<=0) continue;
-    const profit=(r[1]==='provider')?pProf:cProf;
+    // DAILY: [date index, customer rev/profit/minutes/calls,
+    //         provider expense/profit/minutes/calls]. Never mutate CARR.
+    const dur=side==='customer'?cDur:side==='provider'?pDur:cDur+pDur;
+    const calls=side==='customer'?cCalls:side==='provider'?pCalls:cCalls+pCalls;
+    // Keep contractual members with zero selected-side traffic.
+    if(side==='all' && dur<=0 && calls<=0) continue;
+    const profit=side==='customer'?cProf:side==='provider'?pProf:
+      side==='both'?cProf+pProf:(r[1]==='provider'?pProf:cProf);
     out.push([r[0], r[1], r[2], Math.round(dur*10)/10, calls, Math.round(cRev*100)/100, Math.round(profit*10000)/10000, r[7], r[8], r[9], Math.round(pExp*100)/100]);
   }
   return out;
 }
-function baseCarrierList(){ return dateFilterActive() ? dateFilteredCarrierList() : CARR.list; }
-function amFilteredList(){
-  const base=baseCarrierList();
+function baseCarrierList(){
+  return dateFilterActive() || roleFilter==='customer' || roleFilter==='provider'
+    ? dateFilteredCarrierList() : CARR.list;
+}
+function amFilteredList(base=baseCarrierList()){
   return carrierAmFilter ? base.filter(r=>carrierAms(r).includes(carrierAmFilter)) : base;
 }
+function visibleCarrierList(){
+  return amFilteredList().filter(r=>{
+    if(roleFilter==='customer' && !(r[1]==='customer'||r[1]==='both')) return false;
+    if(roleFilter==='provider' && !(r[1]==='provider'||r[1]==='both')) return false;
+    if(roleFilter==='both' && r[1]!=='both') return false;
+    if(profitFilter!=='all'){ const p=r[6]; if(p===null||p===undefined) return false;
+      if(profitFilter==='pos' && !(p>0)) return false; if(profitFilter==='neg' && !(p<0)) return false; }
+    if(carrierQuery && !r[0].toLowerCase().includes(carrierQuery)) return false;
+    return true;
+  });
+}
 function renderSummaryAll(){
-  const base=amFilteredList();
+  // Counts describe contractual membership, independent of traffic side/date.
+  const roster=amFilteredList(CARR.list);
+  const base=visibleCarrierList();
   const c={
-    total:base.length,
-    asCustomer:base.filter(r=>r[1]==='customer'||r[1]==='both').length,
-    asProvider:base.filter(r=>r[1]==='provider'||r[1]==='both').length,
-    both:base.filter(r=>r[1]==='both').length,
-    custOnly:base.filter(r=>r[1]==='customer').length,
-    provOnly:base.filter(r=>r[1]==='provider').length,
+    total:roster.length,
+    asCustomer:roster.filter(r=>r[1]==='customer'||r[1]==='both').length,
+    asProvider:roster.filter(r=>r[1]==='provider'||r[1]==='both').length,
+    both:roster.filter(r=>r[1]==='both').length,
+    custOnly:roster.filter(r=>r[1]==='customer').length,
+    provOnly:roster.filter(r=>r[1]==='provider').length,
   };
   const totMin=base.reduce((s,r)=>s+r[3],0);
   const active=base.filter(r=>r[3]>0||r[4]>0).length;
-  const inactive=c.total-active;
-  const activePct=c.total?100*active/c.total:0;
+  const inactive=base.length-active;
+  const activePct=base.length?100*active/base.length:0;
   const dateOn=dateFilterActive();
-  const totRev=base.reduce((s,r)=>s+(r[5]||0),0), totProfit=base.reduce((s,r)=>s+(r[6]||0),0);
-  let head=`<div class="stat"><div class="v">${c.total}</div><div class="l">${dateOn?'Carriers in period':'Total carriers'}</div></div>`;
+  const moneyIndex=roleFilter==='provider'?10:5;
+  const totRev=base.reduce((s,r)=>s+(r[moneyIndex]||0),0), totProfit=base.reduce((s,r)=>s+(r[6]||0),0);
+  let head=`<div class="stat"><div class="v">${c.total}</div><div class="l">Total carriers</div></div>`;
   if(dateOn){
     head+=`
-    <div class="stat"><div class="v mono">${Math.round(totRev).toLocaleString()}</div><div class="l">Period revenue</div></div>
+    <div class="stat"><div class="v mono">${Math.round(totRev).toLocaleString()}</div><div class="l">Period ${roleFilter==='provider'?'expense':'revenue'}</div></div>
     <div class="stat"><div class="v ${totProfit>=0?'profit-pos':'profit-neg'}">${Math.round(totProfit).toLocaleString()}</div><div class="l">Period profit</div></div>`;
   } else {
     head+=`
@@ -700,18 +726,10 @@ function renderSummaryAll(){
     <div class="stat"><div class="v mono">${Math.round(totMin).toLocaleString()}</div><div class="l">Total minutes</div></div>`;
 }
 function renderRowsAll(){
-  const base = amFilteredList();
+  const base = visibleCarrierList();
   const baseMin = base.reduce((s,r)=>s+r[3],0);
   const actPct = d => baseMin>0 ? '<span class="mono">'+(100*d/baseMin).toFixed(1)+'%</span>' : '<span class="muted">0%</span>';
-  let rows = base.filter(r=>{
-    if(roleFilter==='customer' && !(r[1]==='customer'||r[1]==='both')) return false;
-    if(roleFilter==='provider' && !(r[1]==='provider'||r[1]==='both')) return false;
-    if(roleFilter==='both' && r[1]!=='both') return false;
-    if(profitFilter!=='all'){ const p=r[6]; if(p===null||p===undefined) return false;
-      if(profitFilter==='pos' && !(p>0)) return false; if(profitFilter==='neg' && !(p<0)) return false; }
-    if(carrierQuery && !r[0].toLowerCase().includes(carrierQuery)) return false;
-    return true;
-  });
+  let rows = base;
   if(sortField && ALL_IDX[sortField]!==undefined){
     rows=[...rows].sort((a,b)=> sortDir*((a[ALL_IDX[sortField]]||0)-(b[ALL_IDX[sortField]]||0)));
   } else {
@@ -820,7 +838,7 @@ function updateSuggestions(q){
   });
 }
 searchInput.addEventListener('input', e => {
-  if(mode==='all'){ carrierQuery=e.target.value.trim().toLowerCase(); renderRowsAll(); }
+  if(mode==='all'){ carrierQuery=e.target.value.trim().toLowerCase(); renderSummaryAll(); renderRowsAll(); }
   else updateSuggestions(e.target.value.trim());
 });
 }
