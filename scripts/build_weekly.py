@@ -6,10 +6,22 @@ Files are detected by their header columns, not filenames.
 """
 import csv, os, re, sys
 from collections import Counter, defaultdict
+from pathlib import Path
 import pandas as pd
 
 LEGAL_SUFFIXES = {'ltd', 'limited', 'llc', 'pte', 'srl', 'inc', 'sal', 'offshore', 'co'}
 MARKERS = {'tec', 'com', 'loc'}
+DEFAULT_ALIASES = Path(__file__).resolve().parents[1] / 'config' / 'carrier_aliases.csv'
+
+
+def load_reviewed_aliases(path):
+    if path is None:
+        return []
+    with open(path, newline='', encoding='utf-8-sig') as fh:
+        reader = csv.DictReader(fh)
+        if not {'alias', 'authoritative_name'} <= set(reader.fieldnames or []):
+            raise ValueError('Reviewed aliases require alias and authoritative_name columns')
+        return list(reader)
 
 
 def raw_name(value):
@@ -30,7 +42,7 @@ def norm(value):
 class CarrierResolver:
     """Roster identities never pass through traffic normalization or fuzzy matching."""
 
-    def __init__(self, details=None, exposure=None):
+    def __init__(self, details=None, exposure=None, reviewed_aliases=()):
         self.names, self.by_name, self.examined = {}, {}, {}
         self.sources = defaultdict(set)
         for frame, column in ((exposure, 'Carrier'), (details, 'Carrier Name')):
@@ -61,6 +73,23 @@ class CarrierResolver:
             self.marked[(markers, base)].add(identity)
             self.compact[(markers, ''.join(base))].add(identity)
 
+        self.tec_ids = {k for k, name in self.names.items() if 'tec' in tokens(name)}
+        self.reviewed = {}
+        normalized_aliases = {}
+        for row in reviewed_aliases:
+            alias, target = raw_name(row.get('alias')), raw_name(row.get('authoritative_name'))
+            if not alias or target not in self.by_name:
+                raise ValueError('Reviewed alias target missing or alias blank: ' + alias + ' -> ' + target)
+            identity = self.by_name[target]
+            if identity not in self.tec_ids:
+                raise ValueError('Reviewed alias target must be TEC-related: ' + target)
+            if alias in self.by_name and self.by_name[alias] != identity:
+                raise ValueError('Reviewed alias would merge authoritative carriers: ' + alias)
+            if norm(alias) in normalized_aliases and normalized_aliases[norm(alias)] != identity:
+                raise ValueError('Reviewed alias maps to multiple carriers: ' + alias)
+            normalized_aliases[norm(alias)] = identity
+            self.reviewed[alias] = identity
+
     @staticmethod
     def signature(name):
         words = tokens(name)
@@ -72,6 +101,8 @@ class CarrierResolver:
 
     def resolve(self, name):
         name = raw_name(name)
+        if name in self.reviewed:
+            return self.reviewed[name], ()
         if name in self.by_name:
             return self.by_name[name], ()
         markers, base = self.signature(name)
@@ -140,30 +171,45 @@ class CarrierResolver:
         # Unresolved traffic stays separate, including ambiguous aliases.
         return identity or 'traffic:' + name
 
+    def is_tec_alias(self, name):
+        name = raw_name(name)
+        identity, _ = self.examined[name] if name in self.examined else self.resolve(name)
+        return identity in self.tec_ids if identity is not None else 'tec' in tokens(name)
+
     def validate(self, identities, carriers):
-        if not set(self.names) <= set(identities):
-            raise ValueError('Authoritative roster records collapse or are missing')
+        if len(self.names) != len(self.by_name) or len(set(self.by_name.values())) != len(self.names):
+            raise ValueError('Master authoritative roster records collapse')
+        if not self.tec_ids <= set(identities):
+            raise ValueError('Authoritative TEC roster records collapse or are missing')
         counts = Counter(row['name'] for row in carriers)
-        if any(counts[name] != 1 for name in self.names.values()):
-            raise ValueError('Duplicate or missing authoritative carrier names')
-        if len(carriers) < len(self.names):
-            raise ValueError('Output carrier count below authoritative roster count')
+        if any(counts[self.names[k]] != 1 for k in self.tec_ids) or any(n != 1 for n in counts.values()):
+            raise ValueError('Duplicate or missing authoritative TEC carrier names')
+        if (set(identities) & set(self.names)) - self.tec_ids:
+            raise ValueError('Non-TEC authoritative carrier in production output')
+        if any(not self.is_tec_alias(name) for name in counts):
+            raise ValueError('Non-TEC carrier in production output')
+        if len(carriers) < len(self.tec_ids):
+            raise ValueError('Output carrier count below authoritative TEC roster count')
 
     def diagnostics(self, output_count):
-        matched = sum(identity is not None for identity, _ in self.examined.values())
-        print('Authoritative roster: %d carriers' % len(self.names))
-        print('Traffic aliases examined: %d' % len(self.examined))
-        print('Traffic aliases matched: %d' % matched)
-        print('Traffic aliases unresolved: %d' % (len(self.examined) - matched))
-        unresolved = {name for name, (identity, _) in self.examined.items() if identity is None}
+        tec = {name for name in self.examined if self.is_tec_alias(name)}
+        unresolved = {name for name in tec if self.examined[name][0] is None}
+        print('Master authoritative roster: %d' % len(self.names))
+        print('Authoritative TEC roster: %d' % len(self.tec_ids))
+        print('TEC traffic aliases examined: %d' % len(tec))
+        print('TEC aliases matched: %d' % (len(tec) - len(unresolved)))
+        print('TEC aliases unresolved: %d' % len(unresolved))
+        print('Ignored non-TEC traffic aliases: %d' % (len(self.examined) - len(tec)))
         transactional = {name for name in unresolved if self.sources[name] & {'Gross', 'Full'}}
         print('Gross/Full unresolved: %d' % len(transactional))
         print('LCR-only unresolved: %d' % sum(self.sources[name] == {'LCR'} for name in unresolved))
         print('Output carriers: %d' % output_count)
         for name, (identity, candidates) in sorted(self.examined.items()):
-            if identity is None:
-                sources = ','.join(source for source in ('Gross', 'Full', 'LCR')
-                                   if source in self.sources[name])
+            sources = ','.join(source for source in ('Gross', 'Full', 'LCR')
+                               if source in self.sources[name])
+            if name not in tec:
+                print('  ignored non-TEC [%s]: %s' % (sources, name))
+            elif identity is None:
                 print('  unresolved [%s]: %s%s' % (
                     sources, name, ' | candidates: ' + '; '.join(candidates) if candidates else ''))
 
@@ -225,7 +271,7 @@ def load_lcr(path):
     return pd.DataFrame(out, columns=['dest', 'provider', 'trunk', 'vol', 'rate'])
 
 
-def main(indir, outdir):
+def main(indir, outdir, alias_path=DEFAULT_ALIASES):
     os.makedirs(outdir, exist_ok=True)
 
     # Two kinds of input:
@@ -307,7 +353,7 @@ def main(indir, outdir):
         expo = expo.rename(columns=lambda x: str(x).strip()).drop_duplicates()
     if det is not None:
         det = det.rename(columns=lambda x: str(x).strip()).drop_duplicates()
-    resolver = CarrierResolver(det, expo)
+    resolver = CarrierResolver(det, expo, load_reviewed_aliases(alias_path))
     key = resolver.traffic_key
     display = dict(resolver.names)
     active_unknowns = set()
@@ -329,8 +375,10 @@ def main(indir, outdir):
                 identity = resolver.traffic_key(value, source)
                 display.setdefault(identity, value)
                 resolved, candidates = resolver.examined[value]
-                if active and resolved is None and not candidates:
+                if active and resolved is None and not candidates and resolver.is_tec_alias(value):
                     active_unknowns.add(identity)
+
+    every = resolver.tec_ids | active_unknowns
 
     # Carrier Details holds usernames (m.zreik); Exposure holds display names
     # (Mostafa zreik). Join the two on carrier identity to derive the map.
@@ -413,8 +461,8 @@ def main(indir, outdir):
     bucket = defaultdict(lambda: dict(dur=0.0, rev=0.0, exp=0.0, profit=0.0, calls=0.0))
     for _, r in g.iterrows():
         ck, pk = key(r.get('Customer')), key(r.get('Provider'))
-        if not pk:
-            continue          # zero-traffic placeholder, no provider to route to
+        if pk not in every:
+            continue          # Provider is absent or outside the production TEC roster.
         dur, rev = num(r.get('Duration (m)')) or 0, num(r.get('Revenue')) or 0
         exp, prof = num(r.get('Expense')) or 0, num(r.get('Profit')) or 0
         cls = (num(r.get(calls_col)) or 0) if calls_col else 0
@@ -465,6 +513,10 @@ def main(indir, outdir):
                 a[f].append(r[f])
 
     identity_by_display = {name: identity for identity, name in display.items()}
+    # Provider routes include all business of eligible TEC providers. Customer
+    # routes expose only eligible TEC customer/provider pairs. Per-carrier and
+    # daily totals below retain each TEC side, including mixed-scope business.
+    rows = [r for r in rows if identity_by_display.get(r['customer']) in every]
     routes = []
     for i, ((dest, prov), a) in enumerate(sorted(agg.items(),
                                                  key=lambda kv: (str(kv[0][0]), str(kv[0][1])))):
@@ -492,22 +544,21 @@ def main(indir, outdir):
         exp, prof = num(r.get('Expense')) or 0, num(r.get('Profit')) or 0
         day = str(r.get('Date'))[:10]
         cls = (num(r.get(calls_col)) or 0) if calls_col else 0
-        if ck:
+        if ck in every:
             s = side[ck]['cust']
             s['rev'] += rev; s['profit'] += prof; s['dur'] += dur; s['calls'] += cls
             d = daily_map[(ck, day)]
             d['cust_rev'] += rev; d['cust_profit'] += prof
             d['cust_dur'] += dur; d['cust_calls'] += cls
-        if pk:
+        if pk in every:
             s = side[pk]['prov']
             s['exp'] += exp; s['profit'] += prof; s['dur'] += dur; s['calls'] += cls
             d = daily_map[(pk, day)]
             d['prov_exp'] += exp; d['prov_profit'] += prof
             d['prov_dur'] += dur; d['prov_calls'] += cls
 
-    is_c = {key(x) for x in g['Customer'].dropna() if key(x)}
-    is_p = {key(x) for x in g['Provider'].dropna() if key(x)}
-    every = set(resolver.names) | active_unknowns
+    is_c = {key(x) for x in g['Customer'].dropna()} & every
+    is_p = {key(x) for x in g['Provider'].dropna()} & every
 
     carriers = []
     for k in sorted(every):
