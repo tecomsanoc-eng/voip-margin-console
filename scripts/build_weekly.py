@@ -8,33 +8,121 @@ import csv, os, re, sys
 from collections import Counter, defaultdict
 import pandas as pd
 
-DROP = {'tec','com','loc','ltd','limited','llc','pte','srl','inc','co','sal',
-        'offshore','telecom','communications','networks','global','group',
-        'solutions','carrier','services','international','technologies','holdings'}
+LEGAL_SUFFIXES = {'ltd', 'limited', 'llc', 'pte', 'srl', 'inc', 'sal', 'offshore'}
+MARKERS = {'tec', 'com', 'loc'}
 
 
-def norm(s):
-    """Carrier identity. Raw strings join 5 of 25 carriers; this joins 20."""
-    if not isinstance(s, str):
-        return ''
-    return ''.join(w for w in re.sub(r'[^a-z0-9 ]', ' ', s.lower()).split()
-                   if w not in DROP)
+def raw_name(value):
+    return value.strip() if isinstance(value, str) else ''
 
 
-def build_alias(keys):
-    """Exact match first, then prefix fuzzy with a 4-char floor.
+def tokens(value):
+    # Dotted legal abbreviations (S.A.L, L.L.C, etc.) are suffixes too.
+    value = raw_name(value).lower()
+    value = re.sub(r"\b(?:[a-z]\.){2,}[a-z]?", lambda m: m[0].replace('.', ''), value)
+    return tuple(w for w in re.findall(r'[a-z0-9]+', value) if w not in LEGAL_SUFFIXES)
 
-    Without the floor short keys swallow unrelated carriers.
-    """
-    keys = sorted(k for k in keys if k)
-    alias = {k: k for k in keys}
-    for i, a in enumerate(keys):
-        if len(a) < 4:
-            continue
-        for b in keys[i + 1:]:
-            if len(b) >= 4 and alias[b] == b and (b.startswith(a) or a.startswith(b)):
-                alias[b] = alias[a]
-    return alias
+
+def norm(value):
+    return ' '.join(tokens(value))
+
+
+class CarrierResolver:
+    """Roster identities never pass through traffic normalization or fuzzy matching."""
+
+    def __init__(self, details=None, exposure=None):
+        self.names, self.by_name, self.examined = {}, {}, {}
+        for frame, column in ((exposure, 'Carrier'), (details, 'Carrier Name')):
+            if frame is None:
+                continue
+            seen = set()
+            for _, row in frame.drop_duplicates().iterrows():
+                name = raw_name(row.get(column))
+                if not name:
+                    raise ValueError('Authoritative roster record has no carrier name')
+                if name in seen:
+                    raise ValueError('Duplicate authoritative carrier name: ' + name)
+                seen.add(name)
+                if name in self.by_name:
+                    continue  # Exact name join between snapshots only.
+                carrier_id = row.get('Carrier Id') if column == 'Carrier' else None
+                identity = ('exposure:' + str(carrier_id).strip()
+                            if pd.notna(carrier_id) and str(carrier_id).strip()
+                            else 'roster:' + name)
+                if identity in self.names:
+                    raise ValueError('Authoritative roster records collapse: ' + identity)
+                self.by_name[name] = identity
+                self.names[identity] = name
+        self.normalized, self.marked = defaultdict(set), defaultdict(set)
+        for identity, name in self.names.items():
+            self.normalized[norm(name)].add(identity)
+            self.marked[self.signature(name)].add(identity)
+
+    @staticmethod
+    def signature(name):
+        words = tokens(name)
+        return (tuple(sorted(w for w in words if w in MARKERS)),
+                tuple(w for w in words if w not in MARKERS))
+
+    def roster_key(self, name):
+        return self.by_name[raw_name(name)]
+
+    def resolve(self, name):
+        name = raw_name(name)
+        if name in self.by_name:
+            return self.by_name[name], ()
+        for candidates in (self.normalized.get(norm(name), set()),
+                           self.marked.get(self.signature(name), set())):
+            if candidates:
+                return self.choose(candidates)
+        markers, base = self.signature(name)
+        compact = ''.join(base)
+        candidates = set()
+        for identity, roster_name in self.names.items():
+            other_markers, other_base = self.signature(roster_name)
+            other = ''.join(other_base)
+            # Only long, near-complete prefixes with identical identity markers.
+            if markers == other_markers and min(len(compact), len(other)) >= 6:
+                if (compact.startswith(other) or other.startswith(compact)) and (
+                        min(len(compact), len(other)) / max(len(compact), len(other)) >= .85):
+                    candidates.add(identity)
+        return self.choose(candidates)
+
+    def choose(self, candidates):
+        if len(candidates) == 1:
+            return next(iter(candidates)), ()
+        return None, tuple(sorted(self.names[k] for k in candidates))
+
+    def traffic_key(self, name):
+        name = raw_name(name)
+        if not name:
+            return ''
+        if name not in self.examined:
+            self.examined[name] = self.resolve(name)
+        identity, _ = self.examined[name]
+        # Unresolved traffic stays separate, including ambiguous aliases.
+        return identity or 'traffic:' + name
+
+    def validate(self, identities, carriers):
+        if not set(self.names) <= set(identities):
+            raise ValueError('Authoritative roster records collapse or are missing')
+        counts = Counter(row['name'] for row in carriers)
+        if any(counts[name] != 1 for name in self.names.values()):
+            raise ValueError('Duplicate or missing authoritative carrier names')
+        if len(carriers) < len(self.names):
+            raise ValueError('Output carrier count below authoritative roster count')
+
+    def diagnostics(self, output_count):
+        matched = sum(identity is not None for identity, _ in self.examined.values())
+        print('Authoritative roster: %d carriers' % len(self.names))
+        print('Traffic aliases examined: %d' % len(self.examined))
+        print('Traffic aliases matched: %d' % matched)
+        print('Traffic aliases unresolved: %d' % (len(self.examined) - matched))
+        print('Output carriers: %d' % output_count)
+        for name, (identity, candidates) in sorted(self.examined.items()):
+            if identity is None:
+                print('  unresolved: %s%s' % (name, ' | candidates: ' + '; '.join(candidates)
+                                             if candidates else ''))
 
 
 def num(v):
@@ -172,29 +260,31 @@ def main(indir, outdir):
         full = full.rename(columns=lambda x: str(x).strip())
         full = full[full['Customer'].notna()].drop_duplicates()
 
-    keys = {norm(x) for x in g['Customer'].dropna()} | {norm(x) for x in g['Provider'].dropna()}
     if expo is not None:
-        keys |= {norm(x) for x in expo['Carrier'].dropna()}
+        expo = expo.rename(columns=lambda x: str(x).strip()).drop_duplicates()
     if det is not None:
-        keys |= {norm(x) for x in det['Carrier Name'].dropna()}
+        det = det.rename(columns=lambda x: str(x).strip()).drop_duplicates()
+    resolver = CarrierResolver(det, expo)
+    key = resolver.traffic_key
+    display = dict(resolver.names)
+    traffic_columns = [g['Customer'], g['Provider']]
+    if full is not None:
+        traffic_columns.extend([full['Customer'], full['Provider']])
     if lcr is not None:
-        keys |= {norm(x) for x in lcr['provider']}
-    alias = build_alias(keys)
-    key = lambda n: alias.get(norm(n), norm(n))
-
-    display = {}
-    for s in (g['Customer'], g['Provider']):
-        for v in s.dropna():
-            display.setdefault(key(v), v)
+        traffic_columns.append(lcr['provider'])
+    for column in traffic_columns:
+        for value in column.dropna():
+            if raw_name(value):
+                display.setdefault(key(value), raw_name(value))
 
     # Carrier Details holds usernames (m.zreik); Exposure holds display names
     # (Mostafa zreik). Join the two on carrier identity to derive the map.
     user2name = {}
     if det is not None and expo is not None:
-        emap = {key(r['Carrier']): r.get('Account Manager') for _, r in expo.iterrows()}
+        emap = {resolver.roster_key(r['Carrier']): r.get('Account Manager') for _, r in expo.iterrows()}
         votes = Counter()
         for _, r in det.iterrows():
-            us, ds = r.get('Carrier Account Manager'), emap.get(key(r['Carrier Name']))
+            us, ds = r.get('Carrier Account Manager'), emap.get(resolver.roster_key(r['Carrier Name']))
             if isinstance(us, str) and isinstance(ds, str):
                 us, ds = [x.strip() for x in us.split(',')], [x.strip() for x in ds.split(',')]
                 if len(us) == 1 and len(ds) == 1:
@@ -205,12 +295,12 @@ def main(indir, outdir):
     am_of, ctype, credit_c, credit_p = {}, {}, {}, {}
     if det is not None:
         for _, r in det.iterrows():
-            k = key(r['Carrier Name'])
+            k = resolver.roster_key(r['Carrier Name'])
             u = r.get('Carrier Account Manager')
             if isinstance(u, str) and u.strip():
                 names = [user2name.get(x.strip(), x.strip()) for x in u.split(',')]
                 am_of[k] = '; '.join(dict.fromkeys(names))
-            # Carrier Type is the contractual relationship and covers all 731
+            # Carrier Type is the contractual relationship and covers the roster of
             # carriers. Traffic only tells you who was active in this one week.
             t = r.get('Carrier Type')
             if isinstance(t, str) and t.strip():
@@ -223,7 +313,7 @@ def main(indir, outdir):
     exposure = {}
     if expo is not None:
         for _, r in expo.iterrows():
-            k = key(r['Carrier'])
+            k = resolver.roster_key(r['Carrier'])
             if k not in am_of and isinstance(r.get('Account Manager'), str):
                 am_of[k] = r['Account Manager'].strip()
             exposure[k] = (num(r.get('Current Exposure')),
@@ -319,10 +409,11 @@ def main(indir, outdir):
             if r[f] != '':
                 a[f].append(r[f])
 
+    identity_by_display = {name: identity for identity, name in display.items()}
     routes = []
     for i, ((dest, prov), a) in enumerate(sorted(agg.items(),
                                                  key=lambda kv: (str(kv[0][0]), str(kv[0][1])))):
-        pk = key(prov)
+        pk = identity_by_display[prov]
         # id must stay contiguous from 0: TRUNK is a positional array.
         routes.append(dict(id=i, destination=dest, provider=prov,
                            trunk=trunk_of.get((pk, dest), prov),
@@ -361,7 +452,7 @@ def main(indir, outdir):
 
     is_c = {key(x) for x in g['Customer'].dropna() if key(x)}
     is_p = {key(x) for x in g['Provider'].dropna() if key(x)}
-    every = {k for k in (set(ctype) | set(exposure) | is_c | is_p | set(am_of)) if k}
+    every = set(display)
 
     carriers = []
     for k in sorted(every):
@@ -432,6 +523,9 @@ def main(indir, outdir):
             w = csv.DictWriter(fh, fieldnames=cols, extrasaction='ignore')
             w.writeheader(); w.writerows(data)
         print('  %-20s %6d rows' % (name + '.csv', len(data)))
+
+    resolver.validate(every, carriers)
+    resolver.diagnostics(len(carriers))
 
     print('\nwriting:')
     write('routes', routes, ['id','destination','provider','trunk','lcr','buy','sell',
