@@ -16,6 +16,7 @@ mis-mapped column here becomes a wrong margin on the dashboard.
 import argparse
 import csv
 import os
+import math
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -74,7 +75,10 @@ def coerce(value, kind, table, column, line_no):
         return None
     cleaned = value.replace(",", "").replace("%", "")
     try:
-        return int(float(cleaned)) if kind == INT else float(cleaned)
+        number = float(cleaned)
+        if not math.isfinite(number) or (kind == INT and not number.is_integer()):
+            raise ValueError('Expected finite number or whole integer')
+        return int(number) if kind == INT else number
     except ValueError:
         sys.exit("%s line %d: column '%s' has non-numeric value %r"
                  % (table, line_no, column, value))
@@ -98,6 +102,7 @@ def read_csv(table, path):
             sys.exit("Missing column(s) in %s: %s" % (path, ", ".join(missing)))
 
         rows = []
+        seen = set()
         for line_no, raw in enumerate(reader, start=2):
             row = {}
             for col, kind in columns.items():
@@ -105,6 +110,9 @@ def read_csv(table, path):
             if row.get(pk) is None:
                 sys.exit("%s line %d: primary key '%s' is empty."
                          % (table, line_no, pk))
+            if row[pk] in seen:
+                sys.exit('%s line %d: duplicate primary key %r' % (table, line_no, row[pk]))
+            seen.add(row[pk])
             rows.append(row)
     return rows, pk
 

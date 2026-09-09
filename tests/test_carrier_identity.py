@@ -131,7 +131,7 @@ class CarrierIdentityTests(unittest.TestCase):
 
     def test_reviewed_aliases_and_gtk(self):
         approved = load_reviewed_aliases(DEFAULT_ALIASES)
-        self.assertEqual(len(approved), 7)
+        self.assertEqual(len(approved), 32)
         names = [r['authoritative_name'] for r in approved] + [
             'FN Telecom LLC', 'Tec-Quickcom Telecom Limited OLD',
             'Tec-Quickcom Telecom Limited-Deleted']
@@ -150,6 +150,26 @@ class CarrierIdentityTests(unittest.TestCase):
         self.assertFalse(resolver.is_tec_alias('Technical Services'))
         self.assertFalse(resolver.is_tec_alias('VoiceTec'))
         self.assertFalse(resolver.is_tec_alias('FN Telecom LLC'))
+
+    def test_owner_distinct_carriers_stay_unresolved(self):
+        pairs = {
+            'NGN-Tec': ['NGN ICS-Tec', 'Tec-NGN Corp S.A.L.'],
+            'PC GLOBAL-Tec': ['PC GLOBALCO S.A.L.-Tec', 'tec-PCGlobalMedia'],
+            'Sigma-Tec': ['SigmaPayCC-Tec', 'Tec-Sigma Telecom LLC'],
+            'Stream-Tec': ['Tec-Stream Telecom', 'Tec-Stream-iT  s.r.o.'],
+        }
+        approved = load_reviewed_aliases(DEFAULT_ALIASES)
+        names = [r['authoritative_name'] for r in approved]
+        names += [name for pair in pairs.values() for name in pair]
+        resolver = CarrierResolver(pd.DataFrame({'Carrier Name': names}), reviewed_aliases=approved)
+        self.assertEqual(len(resolver.names), len(names))
+        for alias, pair in pairs.items():
+            with self.subTest(alias=alias):
+                self.assertNotIn(alias, resolver.reviewed)
+                self.assertIsNone(resolver.resolve(alias)[0])
+                self.assertNotEqual(*(resolver.roster_key(n) for n in pair))
+                for name in pair:
+                    self.assertEqual(resolver.resolve(name)[0], resolver.roster_key(name))
 
     def test_reviewed_alias_validation(self):
         names = ['Tec-Example', 'Tec-Another', 'Technical Services', 'Example-COM']
