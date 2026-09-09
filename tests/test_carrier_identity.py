@@ -131,9 +131,8 @@ class CarrierIdentityTests(unittest.TestCase):
 
     def test_reviewed_aliases_and_gtk(self):
         approved = load_reviewed_aliases(DEFAULT_ALIASES)
-        self.assertEqual(len(approved), 6)
+        self.assertEqual(len(approved), 7)
         names = [r['authoritative_name'] for r in approved] + [
-            'TEC_GESTIONES TECNICAS KASTA COSTASOL S.L.,',
             'FN Telecom LLC', 'Tec-Quickcom Telecom Limited OLD',
             'Tec-Quickcom Telecom Limited-Deleted']
         resolver = CarrierResolver(pd.DataFrame({'Carrier Name': names}), reviewed_aliases=approved)
@@ -143,7 +142,9 @@ class CarrierIdentityTests(unittest.TestCase):
                                  resolver.roster_key(row['authoritative_name']))
                 self.assertTrue(resolver.is_tec_alias(row['alias']))
         self.assertEqual(len(resolver.names), len(names))
-        self.assertIsNone(resolver.resolve('GTK TELECOM-TEC')[0])
+        self.assertEqual(resolver.resolve('GTK TELECOM-TEC')[0],
+                         resolver.roster_key('TEC_GESTIONES TECNICAS KASTA COSTASOL S.L.,'))
+        self.assertIsNone(resolver.resolve('GTK_tc')[0])
         self.assertIsNone(resolver.resolve('FN_tc')[0])
         self.assertFalse(resolver.is_tec_alias('FN_tc'))
         self.assertFalse(resolver.is_tec_alias('Technical Services'))
