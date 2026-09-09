@@ -4,9 +4,10 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
-from scripts.build_weekly import CarrierResolver, main
+from scripts.build_weekly import CarrierResolver, main, norm
 
 
 class CarrierIdentityTests(unittest.TestCase):
@@ -48,6 +49,85 @@ class CarrierIdentityTests(unittest.TestCase):
             'Longcarrier Alpha', 'Longcarrier Alphab']}))
         self.assertIsNone(fuzzy.resolve('Longcarrier Alph')[0])
         self.assertEqual(len(fuzzy.resolve('Longcarrier Alph')[1]), 2)
+
+    def test_marker_formats_and_legal_suffixes(self):
+        for marker in ('TEC', 'COM', 'LOC'):
+            name = marker + '-Example Voice Co. LLC'
+            resolver = CarrierResolver(pd.DataFrame({'Carrier Name': [name]}))
+            for alias in ('Example Voice-' + marker, marker + '-Example Voice',
+                          'Example Voice_' + marker, 'Example Voice ' + marker,
+                          'Example Voice.' + marker, 'Example Voice - ' + marker):
+                with self.subTest(alias=alias):
+                    self.assertEqual(resolver.resolve(alias)[0], resolver.roster_key(name))
+            self.assertIsNone(resolver.resolve('Example Voice')[0])
+            self.assertIsNone(resolver.resolve('ExampleVoiceTEC')[0])
+
+    def test_meaningful_words_and_unique_whole_word_prefix(self):
+        self.assertEqual(norm('Global Telecom Communications Networks Services Carrier Co.'),
+                         'global telecom communications networks services carrier')
+        names = ['Tec-Digital Cloud Communications', 'Tec-Stream Telecom', 'Tec-Stream-iT']
+        resolver = CarrierResolver(pd.DataFrame({'Carrier Name': names}))
+        self.assertEqual(resolver.resolve('Digital_Cloud.TEC')[0], resolver.roster_key(names[0]))
+        self.assertIsNone(resolver.resolve('Cloud-Tec')[0])
+        self.assertIsNone(resolver.resolve('Digital Cloud-COM')[0])
+        identity, candidates = resolver.resolve('Stream-Tec')
+        self.assertIsNone(identity)
+        self.assertEqual(set(candidates), set(names[1:]))
+        # Whole meaningful words still distinguish otherwise similar carriers.
+        resolver = CarrierResolver(pd.DataFrame({'Carrier Name': [
+            'Tec-Digital Cloud Communications', 'Tec-Digital Cloud Networks']}))
+        self.assertEqual(len(resolver.resolve('Digital Cloud-Tec')[1]), 2)
+        resolver = CarrierResolver(pd.DataFrame({'Carrier Name': ['Tec-382 Communications']}))
+        self.assertIsNone(resolver.resolve('382-Tec')[0])
+        self.assertEqual(len(resolver.resolve('382-Tec')[1]), 1)
+
+    def test_equivalent_formats_cannot_hide_ambiguity(self):
+        names = ['Tec-Example Voice Ltd', 'ExampleVoice-Tec LLC']
+        resolver = CarrierResolver(pd.DataFrame({'Carrier Name': names}))
+        identity, candidates = resolver.resolve('Tec-Example Voice')
+        self.assertIsNone(identity)
+        self.assertEqual(set(candidates), set(names))
+        self.assertEqual(resolver.resolve(names[0])[0], resolver.roster_key(names[0]))
+
+    def test_source_diagnostics_and_transaction_only_carriers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'exports'
+            source.mkdir()
+            details = pd.concat([self.details, pd.DataFrame({'Carrier Name': [
+                'Tec-Stream Telecom', 'Tec-Stream-iT']})], ignore_index=True)
+            details.to_csv(source / 'details.csv', index=False)
+            self.exposure.to_csv(source / 'exposure.csv', index=False)
+            pd.DataFrame({
+                'Date': ['2026-09-01'] * 4, 'Customer': [self.names[0]] * 4,
+                'Provider': ['Unknown Active', 'Unknown Zero', 'Stream-Tec', 'Shared Unknown'],
+                'Revenue': [10, 0, 20, 30], 'Expense': [5, 0, 10, 15],
+                'Profit': [5, 0, 10, 15], 'Duration (m)': [1, 0, 2, 3],
+                'Sell Destination': ['France'] * 4}).to_csv(source / 'gross.csv', index=False)
+            pd.DataFrame({
+                'Customer': [self.names[0]] * 3,
+                'Provider': ['Full Active', 'Shared Unknown', 'Full Zero'],
+                'Destination': ['France'] * 3, 'IG ASR (%)': [50, 50, 0],
+                'Duration (min)': [4, 5, 0]}).to_csv(source / 'full.csv', index=False)
+            (source / 'lcr.csv').write_text('Unrecognized header\nLCR placeholder\n')
+            lcr = pd.DataFrame({'dest': ['France'] * 3,
+                                'provider': ['LCR Only', 'Shared Unknown', 'Voicekings-Tec'],
+                                'trunk': ['a', 'b', 'c'], 'vol': [100] * 3, 'rate': [.1] * 3})
+            log = io.StringIO()
+            with patch('scripts.build_weekly.load_lcr', return_value=lcr), contextlib.redirect_stdout(log):
+                main(str(source), str(root / 'out'))
+            with (root / 'out' / 'carriers.csv').open(newline='') as f:
+                rows = list(csv.DictReader(f))
+            self.assertEqual({r['name'] for r in rows}, set(details['Carrier Name']) |
+                             {'Unknown Active', 'Shared Unknown', 'Full Active'})
+            self.assertEqual(sum(float(r['rev']) for r in rows), 60)
+            for line in ('unresolved [LCR]: LCR Only',
+                         'unresolved [Gross,Full,LCR]: Shared Unknown',
+                         'unresolved [Full]: Full Active',
+                         'unresolved [Gross]: Stream-Tec | candidates:',
+                         'LCR-only unresolved: 1', 'Gross/Full unresolved: 6',
+                         'Output carriers: 7'):
+                self.assertIn(line, log.getvalue())
 
     def test_sanity_checks(self):
         duplicate_id = self.exposure.copy()

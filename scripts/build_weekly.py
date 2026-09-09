@@ -8,7 +8,7 @@ import csv, os, re, sys
 from collections import Counter, defaultdict
 import pandas as pd
 
-LEGAL_SUFFIXES = {'ltd', 'limited', 'llc', 'pte', 'srl', 'inc', 'sal', 'offshore'}
+LEGAL_SUFFIXES = {'ltd', 'limited', 'llc', 'pte', 'srl', 'inc', 'sal', 'offshore', 'co'}
 MARKERS = {'tec', 'com', 'loc'}
 
 
@@ -32,6 +32,7 @@ class CarrierResolver:
 
     def __init__(self, details=None, exposure=None):
         self.names, self.by_name, self.examined = {}, {}, {}
+        self.sources = defaultdict(set)
         for frame, column in ((exposure, 'Carrier'), (details, 'Carrier Name')):
             if frame is None:
                 continue
@@ -53,10 +54,12 @@ class CarrierResolver:
                     raise ValueError('Authoritative roster records collapse: ' + identity)
                 self.by_name[name] = identity
                 self.names[identity] = name
-        self.normalized, self.marked = defaultdict(set), defaultdict(set)
+        self.normalized, self.marked, self.compact = (defaultdict(set) for _ in range(3))
         for identity, name in self.names.items():
             self.normalized[norm(name)].add(identity)
-            self.marked[self.signature(name)].add(identity)
+            markers, base = self.signature(name)
+            self.marked[(markers, base)].add(identity)
+            self.compact[(markers, ''.join(base))].add(identity)
 
     @staticmethod
     def signature(name):
@@ -71,32 +74,66 @@ class CarrierResolver:
         name = raw_name(name)
         if name in self.by_name:
             return self.by_name[name], ()
-        for candidates in (self.normalized.get(norm(name), set()),
-                           self.marked.get(self.signature(name), set())):
-            if candidates:
-                return self.choose(candidates)
         markers, base = self.signature(name)
         compact = ''.join(base)
-        candidates = set()
+        # All equivalent formats compete together: a unique normalized string
+        # must not hide another roster name with reordered markers or spacing.
+        equivalent = (self.normalized.get(norm(name), set()) |
+                      self.marked.get((markers, base), set()) |
+                      self.compact.get((markers, compact), set()))
+        if equivalent:
+            return self.choose(equivalent)
+        candidates, supported, marker_conflicts = set(), set(), set()
         for identity, roster_name in self.names.items():
             other_markers, other_base = self.signature(roster_name)
             other = ''.join(other_base)
-            # Only long, near-complete prefixes with identical identity markers.
-            if markers == other_markers and min(len(compact), len(other)) >= 6:
-                if (compact.startswith(other) or other.startswith(compact)) and (
-                        min(len(compact), len(other)) / max(len(compact), len(other)) >= .85):
-                    candidates.add(identity)
-        return self.choose(candidates)
+            if not compact or not other:
+                continue
+            if markers != other_markers:
+                if compact == other or (min(len(compact), len(other)) >= 3 and
+                                        (compact.startswith(other) or other.startswith(compact))):
+                    marker_conflicts.add(identity)
+                continue
+            # Spacing inside a name is equivalent, but markers remain separate.
+            if compact == other:
+                candidates.add(identity)
+                supported.add(identity)
+                continue
+            if min(len(compact), len(other)) < 3:
+                continue
+            if not (compact.startswith(other) or other.startswith(compact)):
+                continue
+            # Keep every plausible prefix competitor, even if only one meets
+            # the stronger acceptance rule below. Never rank away ambiguity.
+            candidates.add(identity)
+            if min(len(compact), len(other)) < 6:
+                continue
+            # A marked traffic name may omit trailing roster words only at a
+            # whole-word boundary. All those words remain in the roster index;
+            # e.g. Stream matches both Stream Telecom and Stream-iT, not one.
+            whole_prefix = bool(markers) and any(
+                compact == ''.join(other_base[:end])
+                for end in range(1, len(other_base)))
+            near_prefix = (len(base) == len(other_base) and
+                           min(len(compact), len(other)) / max(len(compact), len(other)) >= .85)
+            if whole_prefix or near_prefix:
+                supported.add(identity)
+        if supported:
+            return self.choose(candidates)
+        # Plausible but insufficient evidence is not a genuinely unknown name.
+        return None, tuple(sorted(self.names[k] for k in candidates | marker_conflicts))
 
     def choose(self, candidates):
         if len(candidates) == 1:
             return next(iter(candidates)), ()
         return None, tuple(sorted(self.names[k] for k in candidates))
 
-    def traffic_key(self, name):
+    def traffic_key(self, name, source=None):
         name = raw_name(name)
         if not name:
             return ''
+        if source is not None:
+            self.sources[name].add(source)
         if name not in self.examined:
             self.examined[name] = self.resolve(name)
         identity, _ = self.examined[name]
@@ -118,11 +155,17 @@ class CarrierResolver:
         print('Traffic aliases examined: %d' % len(self.examined))
         print('Traffic aliases matched: %d' % matched)
         print('Traffic aliases unresolved: %d' % (len(self.examined) - matched))
+        unresolved = {name for name, (identity, _) in self.examined.items() if identity is None}
+        transactional = {name for name in unresolved if self.sources[name] & {'Gross', 'Full'}}
+        print('Gross/Full unresolved: %d' % len(transactional))
+        print('LCR-only unresolved: %d' % sum(self.sources[name] == {'LCR'} for name in unresolved))
         print('Output carriers: %d' % output_count)
         for name, (identity, candidates) in sorted(self.examined.items()):
             if identity is None:
-                print('  unresolved: %s%s' % (name, ' | candidates: ' + '; '.join(candidates)
-                                             if candidates else ''))
+                sources = ','.join(source for source in ('Gross', 'Full', 'LCR')
+                                   if source in self.sources[name])
+                print('  unresolved [%s]: %s%s' % (
+                    sources, name, ' | candidates: ' + '; '.join(candidates) if candidates else ''))
 
 
 def num(v):
@@ -267,15 +310,27 @@ def main(indir, outdir):
     resolver = CarrierResolver(det, expo)
     key = resolver.traffic_key
     display = dict(resolver.names)
-    traffic_columns = [g['Customer'], g['Provider']]
-    if full is not None:
-        traffic_columns.extend([full['Customer'], full['Provider']])
-    if lcr is not None:
-        traffic_columns.append(lcr['provider'])
-    for column in traffic_columns:
-        for value in column.dropna():
-            if raw_name(value):
-                display.setdefault(key(value), raw_name(value))
+    active_unknowns = set()
+    # Examine all aliases for diagnostics, but a rate-sheet entry or zero-only
+    # placeholder is not evidence of a new carrier. Ambiguous names stay out
+    # of the carrier roster while retaining their raw labels in traffic CSVs.
+    for source, frame in (('Gross', g), ('Full', full), ('LCR', lcr)):
+        if frame is None:
+            continue
+        columns = ('provider',) if source == 'LCR' else ('Customer', 'Provider')
+        metrics = [c for c in frame.columns if c in ('Revenue', 'Expense', 'Profit')
+                   or str(c).lower().startswith('duration') or 'call' in str(c).lower()]
+        for _, row in frame.iterrows():
+            active = source != 'LCR' and any((num(row.get(c)) or 0) != 0 for c in metrics)
+            for column in columns:
+                value = raw_name(row.get(column))
+                if not value:
+                    continue
+                identity = resolver.traffic_key(value, source)
+                display.setdefault(identity, value)
+                resolved, candidates = resolver.examined[value]
+                if active and resolved is None and not candidates:
+                    active_unknowns.add(identity)
 
     # Carrier Details holds usernames (m.zreik); Exposure holds display names
     # (Mostafa zreik). Join the two on carrier identity to derive the map.
@@ -452,7 +507,7 @@ def main(indir, outdir):
 
     is_c = {key(x) for x in g['Customer'].dropna() if key(x)}
     is_p = {key(x) for x in g['Provider'].dropna() if key(x)}
-    every = set(display)
+    every = set(resolver.names) | active_unknowns
 
     carriers = []
     for k in sorted(every):
